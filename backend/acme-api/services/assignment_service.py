@@ -21,7 +21,7 @@ from schemas.assignment import (
     ScheduleItem,
 )
 from schemas.user import UserSummary
-from services import clock
+from services import clock, cost_service
 from services.access import (
     can_view_project,
     ensure_can_manage_project,
@@ -30,7 +30,7 @@ from services.access import (
     get_project_or_404,
 )
 from services.audit_service import record_audit
-from services.project_service import ensure_not_archived, ensure_schedulable
+from services.project_service import ensure_not_archived, ensure_schedulable, lock_project
 from services.scheduling_rules import (
     assignment_state,
     conflict,
@@ -94,15 +94,41 @@ def _validate_period(milestone: Milestone, start: date, end: date, today: date) 
         )
 
 
-def _require_eligible_employee(db: Session, employee_id: int, project: Project) -> User:
-    """Employee must exist, hold the employee role, be active and report to the project's manager."""
-    employee = db.get(User, employee_id)
+def _lock_for_change(
+    db: Session, *, project_ids: list[int], employee_id: int, refresh: tuple[Any, ...] = ()
+) -> User | None:
+    """Take row locks in a fixed order, then refresh already-loaded objects.
+
+    Lock order is always: projects (ascending id), then the employee. Every
+    scheduling mutation follows it, which rules out lock-order deadlocks. After
+    the locks are granted, the supplied objects are reloaded so that every later
+    validation sees state committed by competing transactions (PostgreSQL
+    READ COMMITTED gives each statement a fresh snapshot, but the ORM identity
+    map would otherwise keep serving values read before the lock).
+    """
+    for project_id in sorted(set(project_ids)):
+        lock_project(db, project_id)
+    employee = lock_employee(db, employee_id)
+    for obj in refresh:
+        db.refresh(obj)
+    return employee
+
+
+def _require_eligible_employee(
+    db: Session, employee: User | None, project: Project, start: date
+) -> User:
+    """Employee must be active, report to the project's manager and have work terms."""
     if employee is None or employee.role != "employee":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
     if not employee.is_active:
         raise conflict("Deactivated employees cannot receive new assignments")
     if db.get(EmployeeManager, (employee.id, project.manager_id)) is None:
         raise conflict("Employee is not organizationally assigned to the project's manager")
+    if not cost_service.has_terms_effective_on(db, employee.id, start):
+        raise conflict(
+            "Employee has no work terms effective on the assignment start date; "
+            "an administrator must record compensation terms first"
+        )
     return employee
 
 
@@ -144,13 +170,18 @@ def create_assignment(
         milestone = get_milestone_or_404(db, milestone_id)
         project = get_project_or_404(db, milestone.project_id)
         ensure_can_manage_project(actor, project)
+        employee = _lock_for_change(
+            db,
+            project_ids=[project.id],
+            employee_id=payload.employee_id,
+            refresh=(project, milestone),
+        )
+        ensure_can_manage_project(actor, project)
         ensure_schedulable(project)
         if milestone.status != "pending":
             raise conflict("Cannot schedule work on a completed milestone")
         _validate_period(milestone, payload.start_date, payload.planned_end_date, today)
-        employee = _require_eligible_employee(db, payload.employee_id, project)
-
-        lock_employee(db, employee.id)
+        employee = _require_eligible_employee(db, employee, project, payload.start_date)
         _raise_if_conflicts(db, employee.id, payload.start_date, payload.planned_end_date)
 
         assignment = MilestoneAssignment(
@@ -196,6 +227,13 @@ def update_assignment(
         milestone = get_milestone_or_404(db, assignment.milestone_id)
         project = get_project_or_404(db, milestone.project_id)
         ensure_can_manage_project(actor, project)
+        _lock_for_change(
+            db,
+            project_ids=[project.id],
+            employee_id=assignment.employee_id,
+            refresh=(project, milestone, assignment),
+        )
+        ensure_can_manage_project(actor, project)
         ensure_schedulable(project)
         if milestone.status != "pending":
             raise conflict("Assignments on completed milestones cannot be edited")
@@ -221,8 +259,11 @@ def update_assignment(
                 f"Assignment must fall within the milestone dates "
                 f"({milestone.start_date} to {milestone.end_date})"
             )
+        if new_start < assignment.start_date and not cost_service.has_terms_effective_on(
+            db, assignment.employee_id, new_start
+        ):
+            raise conflict("Employee has no work terms effective on the new start date")
 
-        lock_employee(db, assignment.employee_id)
         _raise_if_conflicts(db, assignment.employee_id, new_start, new_end, exclude_id=assignment.id)
 
         before = _snapshot(assignment)
@@ -259,13 +300,19 @@ def end_assignment(
         milestone = get_milestone_or_404(db, assignment.milestone_id)
         project = get_project_or_404(db, milestone.project_id)
         ensure_can_manage_project(actor, project)
+        _lock_for_change(
+            db,
+            project_ids=[project.id],
+            employee_id=assignment.employee_id,
+            refresh=(project, milestone, assignment),
+        )
+        ensure_can_manage_project(actor, project)
         ensure_not_archived(project)
         if assignment.ended_at is not None:
             raise conflict("Assignment has already been ended")
         if effective_end_date(assignment, milestone) < today:
             raise conflict("Assignment has already finished and is historical")
 
-        lock_employee(db, assignment.employee_id)
         before = _snapshot(assignment)
         assignment.ended_at = day_start(today)
         record_audit(
@@ -309,6 +356,14 @@ def transfer_assignment(
         dest_project = get_project_or_404(db, dest_ms.project_id)
         ensure_can_manage_project(actor, source_project)
         ensure_can_manage_project(actor, dest_project)
+        employee = _lock_for_change(
+            db,
+            project_ids=[source_project.id, dest_project.id],
+            employee_id=source.employee_id,
+            refresh=(source_project, dest_project, source_ms, dest_ms, source),
+        )
+        ensure_can_manage_project(actor, source_project)
+        ensure_can_manage_project(actor, dest_project)
         ensure_schedulable(source_project)
         ensure_schedulable(dest_project)
         if source_ms.status != "pending" or dest_ms.status != "pending":
@@ -324,9 +379,8 @@ def transfer_assignment(
         source_end = effective_end_date(source, source_ms)
         if source_end < today or source_end < start:
             raise conflict("Source assignment has no remaining work on or after the transfer date")
-        employee = _require_eligible_employee(db, source.employee_id, dest_project)
+        employee = _require_eligible_employee(db, employee, dest_project, start)
 
-        lock_employee(db, employee.id)
         before = _snapshot(source)
         source.ended_at = day_start(start)
         db.flush()

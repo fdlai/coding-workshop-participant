@@ -17,6 +17,7 @@ from main import app
 from models.milestone import Milestone
 from models.project import Project
 from models.user import EmployeeManager, User
+from models.work_terms import EmployeeWorkTerms
 from services.auth_service import hash_password
 
 
@@ -130,11 +131,25 @@ def make_milestone(session, project, start: date, end: date, **overrides) -> Mil
     return milestone
 
 
+def make_terms(session, employee, rate="40.00", hours="40", effective_from=date(2030, 1, 1)) -> EmployeeWorkTerms:
+    """Insert a work-terms record directly into the test database."""
+    row = EmployeeWorkTerms(
+        employee_id=employee.id,
+        hourly_rate=Decimal(rate),
+        weekly_hours=Decimal(hours),
+        effective_from=effective_from,
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
 @pytest.fixture()
 def world(db, frozen_clock):
     """Admin, manager, two linked employees, an unlinked employee, a project and milestone.
 
-    Frozen "today" is 2030-06-12. The milestone spans 2030-06-01..2030-08-31.
+    Frozen "today" is 2030-06-12 (a Wednesday). Both linked employees have 40h/week at
+    $40/h (daily cost $320) effective 2030-01-01. The milestone spans 2030-06-01..08-31.
     """
     ns = type("World", (), {})()
     ns.admin = db.query(User).filter_by(username="adminuser").one()
@@ -145,6 +160,9 @@ def world(db, frozen_clock):
     ns.stranger = make_user(db, "stranger", "employee")
     link_employee(db, ns.emp, ns.manager)
     link_employee(db, ns.emp2, ns.manager)
+    make_terms(db, ns.emp)
+    make_terms(db, ns.emp2)
+    make_terms(db, ns.stranger)
     ns.project = make_project(db, ns.manager, ns.admin, name="Alpha")
     ns.milestone = make_milestone(db, ns.project, date(2030, 6, 1), date(2030, 8, 31), name="M1")
     ns.milestone2 = make_milestone(db, ns.project, date(2030, 9, 1), date(2030, 10, 31), name="M2")

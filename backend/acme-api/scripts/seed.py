@@ -15,8 +15,8 @@ Safety properties:
     ``SEED_ALLOW_PRODUCTION=yes`` is also set.
   * The demo password comes from the environment, never from source code.
 
-Seeds the organization plus demo projects, milestones, and assignments; later phases
-add compensation data.
+Seeds the organization, effective-dated work terms, and demo projects, milestones and
+assignments.
 """
 
 import argparse
@@ -32,6 +32,7 @@ from models.assignment import MilestoneAssignment
 from models.milestone import Milestone
 from models.project import Project
 from models.user import EmployeeManager, User
+from models.work_terms import EmployeeWorkTerms
 from services.audit_service import record_audit
 from services.auth_service import hash_password
 
@@ -186,7 +187,7 @@ def _midnight(day: date) -> datetime:
 DEMO_PROJECTS = [
     {
         "name": "Demo: Customer Portal Redesign", "manager": 0, "status": "active", "archived": False,
-        "start": -60, "end": 120, "budget": "185000.00",
+        "start": -60, "end": 120, "budget": "80000.00",
         "milestones": [("Discovery and UX research", -60, -31, True), ("Core build", -30, 30, False),
                        ("Beta hardening", 31, 90, False)],
         "assignments": [(0, 0, -60, -31, None), (0, 1, -30, 30, None), (4, 1, -20, 30, None),
@@ -194,7 +195,7 @@ DEMO_PROJECTS = [
     },
     {
         "name": "Demo: Data Platform Migration", "manager": 1, "status": "active", "archived": False,
-        "start": -45, "end": 60, "budget": "240000.00",
+        "start": -45, "end": 60, "budget": "120000.00",
         "milestones": [("Source inventory", -45, -1, True), ("Pipeline cutover", 0, 60, False)],
         "assignments": [(1, 0, -45, -1, None), (5, 1, 0, 40, None), (9, 1, 5, 60, None)],
     },
@@ -212,7 +213,7 @@ DEMO_PROJECTS = [
     },
     {
         "name": "Demo: Intranet Refresh", "manager": 0, "status": "completed", "archived": True,
-        "start": -320, "end": -240, "budget": "45000.00",
+        "start": -320, "end": -240, "budget": "15000.00",
         "milestones": [("Content migration", -320, -240, True)],
         "assignments": [(12, 0, -300, -250, None)],
     },
@@ -280,6 +281,61 @@ def seed_projects(
     return report
 
 
+def _terms_plan(index: int) -> list[tuple[int, Decimal, Decimal]]:
+    """Return deterministic (effective offset in days, hourly rate, weekly hours) for an employee.
+
+    The first term predates every seeded assignment; some employees have a past raise
+    and some a scheduled future raise so historical rates are exercised.
+    """
+    rate = Decimal(45 + (index * 7) % 35)
+    hours = Decimal("32") if index % 5 == 3 else Decimal("40")
+    plan = [(-400, rate, hours)]
+    if index % 3 == 0:
+        plan.append((-100, rate + Decimal("4"), hours))
+    if index % 4 == 1:
+        plan.append((30, rate + Decimal("6"), hours))
+    return plan
+
+
+def seed_work_terms(
+    db: Session, report: SeedReport | None = None, today: date | None = None
+) -> SeedReport:
+    """Create effective-dated work terms for every demo employee.
+
+    Idempotent per (employee, effective date); existing rows are never changed.
+    Requires the demo organization. Flushes but does not commit.
+    """
+    report = report or SeedReport()
+    today = today or datetime.now(timezone.utc).date()
+    admin = _demo_user(db, *ADMIN[:2])
+    for index, (first, last, _) in enumerate(EMPLOYEES):
+        employee = _demo_user(db, first, last)
+        for offset, rate, hours in _terms_plan(index):
+            effective = today + timedelta(days=offset)
+            exists = db.scalar(
+                select(EmployeeWorkTerms.id).where(
+                    EmployeeWorkTerms.employee_id == employee.id,
+                    EmployeeWorkTerms.effective_from == effective,
+                )
+            )
+            if exists is not None:
+                report.add("work_terms", False)
+                continue
+            row = EmployeeWorkTerms(
+                employee_id=employee.id, hourly_rate=rate, weekly_hours=hours, effective_from=effective
+            )
+            db.add(row)
+            db.flush()
+            record_audit(
+                db, actor_id=admin.id, action="work_terms.create", entity_type="employee_work_terms",
+                entity_id=row.id, description=f"Seeded work terms for '{employee.username}'",
+                changes={"after": {"hourly_rate": str(rate), "weekly_hours": str(hours),
+                                   "effective_from": str(effective)}},
+            )
+            report.add("work_terms", True)
+    return report
+
+
 def _print_report(report: SeedReport, applied: bool) -> None:
     verb = "Created" if applied else "Would create"
     print(f"{verb}: {report.created or 'nothing'}")
@@ -303,6 +359,7 @@ def main() -> None:
     with SessionLocal() as db:
         try:
             report = seed_organization(db, password)
+            seed_work_terms(db, report)
             seed_projects(db, report)
             if args.apply:
                 db.commit()

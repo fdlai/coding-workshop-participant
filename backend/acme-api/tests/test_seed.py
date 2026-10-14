@@ -7,7 +7,16 @@ from models.audit_log import AuditLog
 from models.milestone import Milestone
 from models.project import Project
 from models.user import EmployeeManager, User
-from scripts.seed import DEMO_PROJECTS, EMPLOYEES, MANAGERS, seed_organization, seed_projects
+from scripts.seed import (
+    DEMO_PROJECTS,
+    EMPLOYEES,
+    MANAGERS,
+    seed_organization,
+    seed_projects,
+    seed_work_terms,
+)
+from models.work_terms import EmployeeWorkTerms
+from services.cost_service import calculate_project_costs, money
 from services.scheduling_rules import effective_window, ranges_overlap
 
 
@@ -88,3 +97,42 @@ def test_seeded_assignments_respect_organization_and_milestones(db):
         project = a.milestone.project
         assert db.get(EmployeeManager, (a.employee_id, project.manager_id)) is not None
         assert a.milestone.start_date <= a.start_date <= a.planned_end_date <= a.milestone.end_date
+
+
+def test_seed_work_terms_idempotent_historical_and_prices_all_assignments(db):
+    today = date(2030, 6, 12)
+    seed_organization(db, "DemoPass123!")
+    first = seed_work_terms(db, today=today)
+    db.commit()
+    assert first.created["work_terms"] >= len(EMPLOYEES)
+    count = db.query(EmployeeWorkTerms).count()
+    again = seed_work_terms(db, today=today)
+    db.commit()
+    assert "work_terms" not in again.created
+    assert db.query(EmployeeWorkTerms).count() == count
+
+    dates = [t.effective_from for t in db.query(EmployeeWorkTerms)]
+    assert any(d < today for d in dates) and any(d > today for d in dates)
+
+    seed_projects(db, today=today)
+    db.commit()
+    healths = set()
+    for project in db.query(Project):
+        total = calculate_project_costs(db, [project.id], today)[project.id].total
+        assert total.unpriced_days == 0
+        spent = money(total.accrued) + money(total.projected)
+        healths.add("over" if spent > project.estimated_budget else "under")
+    assert healths == {"over", "under"}
+
+
+def test_seed_work_terms_never_touches_existing_terms(db):
+    today = date(2030, 6, 12)
+    seed_organization(db, "DemoPass123!")
+    seed_work_terms(db, today=today)
+    db.commit()
+    row = db.query(EmployeeWorkTerms).first()
+    original = (row.id, str(row.hourly_rate), row.effective_from)
+    seed_work_terms(db, today=today)
+    db.commit()
+    db.refresh(row)
+    assert (row.id, str(row.hourly_rate), row.effective_from) == original

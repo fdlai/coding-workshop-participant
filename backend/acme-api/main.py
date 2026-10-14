@@ -8,6 +8,7 @@ from routers.milestones import router as milestones_router
 from routers.projects import router as projects_router
 from routers.relationships import router as relationships_router
 from routers.users import router as users_router
+from routers.work_terms import router as work_terms_router
 
 
 app = FastAPI(title="ACME Resource Management API")
@@ -33,3 +34,4 @@ app.include_router(relationships_router, prefix="/api/v1")
 app.include_router(projects_router, prefix="/api/v1")
 app.include_router(milestones_router, prefix="/api/v1")
 app.include_router(assignments_router, prefix="/api/v1")
+app.include_router(work_terms_router, prefix="/api/v1")

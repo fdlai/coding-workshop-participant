@@ -91,15 +91,26 @@ def unprocessable(detail: str) -> HTTPException:
     return HTTPException(status_code=422, detail=detail)
 
 
-def lock_employee(db: Session, employee_id: int) -> None:
-    """Serialize scheduling changes for one employee.
+def lock_employee(db: Session, employee_id: int) -> User | None:
+    """Serialize scheduling and compensation changes for one employee.
 
-    Takes a row lock (``SELECT ... FOR UPDATE``) on the employee's user row so
-    concurrent requests cannot both pass the overlap check and then both insert.
-    The lock is held until the surrounding transaction commits or rolls back.
-    SQLite (used only in tests) ignores the lock clause.
+    Takes a row lock (``SELECT ... FOR NO KEY UPDATE``) on the employee's user
+    row so concurrent requests cannot both pass the overlap check and then
+    both insert. The lock is held until the surrounding transaction commits or
+    rolls back. ``key_share`` selects the weaker NO KEY UPDATE mode: it still
+    conflicts with every other scheduling lock, but does not block unrelated
+    inserts that merely reference the user (for example audit rows).
+
+    ``populate_existing`` refreshes any already-loaded copy of the row, so the
+    caller validates fresh state (e.g. ``is_active``) rather than a snapshot
+    read before the lock was granted. SQLite (tests only) ignores the clause.
     """
-    db.execute(select(User.id).where(User.id == employee_id).with_for_update())
+    return db.scalar(
+        select(User)
+        .where(User.id == employee_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )
 
 
 def find_conflicts(

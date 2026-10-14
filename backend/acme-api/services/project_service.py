@@ -86,8 +86,17 @@ def list_projects(
 
 
 def lock_project(db: Session, project_id: int) -> Project:
-    """Load a project with a row lock to serialize concurrent milestone changes."""
-    project = db.scalar(select(Project).where(Project.id == project_id).with_for_update())
+    """Load a project with a row lock to serialize concurrent project-scoped changes.
+
+    ``populate_existing`` guarantees the returned object reflects committed
+    state at lock time, not an earlier snapshot held in the session.
+    """
+    project = db.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return project

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.project import Project
 from models.user import User
+from schemas.budget import BudgetOut, TimelineOut
 from schemas.milestone import MilestoneCreate, MilestoneOut
 from schemas.project import (
     ProjectCreate,
@@ -15,7 +16,7 @@ from schemas.project import (
     ProjectStatusUpdate,
     ProjectUpdate,
 )
-from services import milestone_service, project_service
+from services import budget_service, milestone_service, project_service
 from services.access import ensure_can_view_project, get_project_or_404
 from services.auth_service import get_current_user, require_roles
 
@@ -75,6 +76,26 @@ def get_project(
     project = get_project_or_404(db, project_id)
     ensure_can_view_project(db, current_user, project)
     return project_view(project, current_user)
+
+
+@router.get("/{project_id}/budget", response_model=BudgetOut)
+def get_project_budget(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BudgetOut:
+    """Return estimated labor cost and budget position (administrators and the owning manager)."""
+    return budget_service.project_budget(db, current_user, project_id)
+
+
+@router.get("/{project_id}/timeline", response_model=TimelineOut)
+def get_project_timeline(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TimelineOut:
+    """Return milestone placement for the project timeline (no cost data)."""
+    return budget_service.project_timeline(db, current_user, project_id)
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)
