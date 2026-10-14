@@ -1,9 +1,8 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
 
-from database import Base, database_url
+from database import Base, database_url, engine
 import models  # Registers all seven SQLAlchemy models
 
 
@@ -28,18 +27,7 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = database_url.render_as_string(
-        hide_password=False
-    )
-
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-
-    with connectable.connect() as connection:
+    with engine.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
