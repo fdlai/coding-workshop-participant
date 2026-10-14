@@ -4,11 +4,13 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
 from models.user import User
+from schemas.user import normalize_username
 
 
 password_hasher = PasswordHash.recommended()
@@ -60,7 +62,11 @@ def decode_access_token(token: str) -> str:
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
     """Validate a username/password pair and return the active user record."""
-    user = db.query(User).filter(User.username == username).first()
+    user = (
+        db.query(User)
+        .filter(func.lower(User.username) == normalize_username(username))
+        .first()
+    )
     if not user or not user.is_active:
         return None
     if not verify_password(password, user.password_hash):

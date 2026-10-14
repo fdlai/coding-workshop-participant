@@ -1,61 +1,8 @@
-import os
-from datetime import datetime, timezone
-
-os.environ.setdefault("JWT_SECRET_KEY", "test-auth-secret-key-1234567890")
-
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from database import Base, get_db
 from main import app
-from models.user import User
-from services.auth_service import hash_password
-
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-def override_get_db():
-    database = TestingSessionLocal()
-    try:
-        yield database
-    finally:
-        database.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(scope="function")
-def setup_db():
-    Base.metadata.create_all(bind=engine)
-    session = TestingSessionLocal()
-    user = User(
-        username="adminuser",
-        email="admin@example.com",
-        first_name="Admin",
-        last_name="User",
-        password_hash=hash_password("Password123!"),
-        role="admin",
-        job_title="Administrator",
-        is_active=True,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    session.add(user)
-    session.commit()
-    session.close()
-    yield
-    Base.metadata.drop_all(bind=engine)
+from tests.conftest import TestingSessionLocal
 
 
 def test_login_returns_token(setup_db):
