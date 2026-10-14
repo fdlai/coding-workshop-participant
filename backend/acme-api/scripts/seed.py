@@ -1,9 +1,12 @@
-"""Safe, repeatable development seed utility (organization step).
+"""Safe, repeatable development seed utility.
 
 Run explicitly from ``backend/acme-api``::
 
     $env:SEED_DEMO_PASSWORD = "<dev-only password>"
     python scripts/seed.py
+
+The dataset itself (people, reporting lines, projects) lives in ``scripts/seed_data.py``;
+this module turns it into database rows.
 
 Safety properties:
   * Never runs on API startup; it only runs when you invoke it.
@@ -14,10 +17,9 @@ Safety properties:
     never touched; re-running creates nothing new.
   * Refuses to run when ``APP_ENV`` is ``production`` unless
     ``SEED_ALLOW_PRODUCTION=yes`` is also set.
-  * The demo password comes from the environment, never from source code.
-
-Seeds the organization, effective-dated work terms, and demo projects, milestones and
-assignments.
+  * The demo password comes from the environment, never from source code, and every
+    demo account shares it.
+  * Audit rows it writes are labelled as synthetic seed data.
 """
 
 import os
@@ -25,13 +27,9 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
-from dotenv import load_dotenv
-
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-load_dotenv()
 
 # Allow `python scripts/seed.py`, which otherwise cannot import the project packages.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,47 +39,30 @@ from models.milestone import Milestone
 from models.project import Project
 from models.user import EmployeeManager, User
 from models.work_terms import EmployeeWorkTerms
+from scripts.seed_data import (  # noqa: F401  (re-exported for tests and callers)
+    ADMIN,
+    ADMINS,
+    EMPLOYEES,
+    MANAGERS,
+    SECOND_MANAGER,
+    _terms_plan,
+    build_projects,
+    reporting_lines,
+)
 from services.audit_service import record_audit
 from services.auth_service import hash_password
 
 
 DEMO_PREFIX = "demo."
 DEMO_EMAIL_DOMAIN = "acme-demo.example"
+SYNTHETIC_LABEL = "[Synthetic seed data] "
 
-ADMIN = ("Avery", "Brooks", "Chief Operating Officer")
-MANAGERS = [
-    ("Morgan", "Hayes", "Engineering Manager"),
-    ("Priya", "Natarajan", "Product Delivery Manager"),
-    ("Daniel", "Okafor", "Infrastructure Manager"),
-    ("Elena", "Rossi", "Design Manager"),
-]
-EMPLOYEES = [
-    ("Liam", "Anderson", "Software Engineer"),
-    ("Sofia", "Martinez", "Senior Software Engineer"),
-    ("Noah", "Kim", "Frontend Developer"),
-    ("Aisha", "Khan", "Backend Developer"),
-    ("Ethan", "Walker", "DevOps Engineer"),
-    ("Mia", "Nguyen", "QA Engineer"),
-    ("Lucas", "Fischer", "Data Engineer"),
-    ("Olivia", "Dubois", "UX Designer"),
-    ("James", "Tanaka", "Software Engineer"),
-    ("Hannah", "Cohen", "Business Analyst"),
-    ("Mateo", "Silva", "Site Reliability Engineer"),
-    ("Chloe", "Johansson", "Product Designer"),
-    ("Ravi", "Patel", "Senior Backend Developer"),
-    ("Grace", "Oyelaran", "QA Engineer"),
-    ("Samuel", "Lindgren", "Frontend Developer"),
-    ("Zoe", "Carter", "Technical Writer"),
-    ("Omar", "Haddad", "Security Engineer"),
-    ("Isabel", "Moreau", "Data Analyst"),
-]
-# Employees (by index) who also report to a second manager (by index).
-SECOND_MANAGER = {1: 1, 3: 2, 4: 2, 7: 0, 11: 0, 12: 3, 14: 1}
+DEMO_PROJECTS = build_projects()
 
 
 @dataclass
 class SeedReport:
-    """Counts of records created (or that would be created in a dry run)."""
+    """Counts of records created or already present."""
 
     created: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
@@ -97,10 +78,25 @@ def demo_username(first: str, last: str) -> str:
     return f"{DEMO_PREFIX}{first}.{last}".lower()
 
 
+def _midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+
+def _audit(db: Session, today: date, when: date, minute: int = 0, **fields) -> None:
+    """Stage a clearly labelled synthetic audit row dated on ``when`` (never in the future)."""
+    fields["description"] = SYNTHETIC_LABEL + fields["description"]
+    fields["changes"] = {**(fields.get("changes") or {}), "synthetic_seed": True}
+    entry = record_audit(db, **fields)
+    stamp = datetime.combine(min(when, today), time(9, 0), tzinfo=timezone.utc)
+    entry.created_at = stamp + timedelta(minutes=minute)
+
+
 def _ensure_user(
     db: Session,
     report: SeedReport,
+    today: date,
     actor_id: int | None,
+    order: int,
     *,
     first: str,
     last: str,
@@ -126,8 +122,11 @@ def _ensure_user(
     )
     db.add(user)
     db.flush()
-    record_audit(
+    _audit(
         db,
+        today,
+        today - timedelta(days=420),
+        order,
         actor_id=actor_id or user.id,
         action="user.create",
         entity_type="user",
@@ -140,75 +139,83 @@ def _ensure_user(
 
 
 def _ensure_link(
-    db: Session, report: SeedReport, actor: User, employee: User, manager: User
+    db: Session,
+    report: SeedReport,
+    today: date,
+    actor: User,
+    employee: User,
+    manager: User,
+    audited: bool,
+    order: int,
 ) -> None:
     if db.get(EmployeeManager, (employee.id, manager.id)) is not None:
         report.add("employee_managers", False)
         return
     db.add(EmployeeManager(employee_id=employee.id, manager_id=manager.id))
     db.flush()
-    record_audit(
-        db,
-        actor_id=actor.id,
-        action="employee_manager.assign",
-        entity_type="employee_manager",
-        entity_id=employee.id,
-        description=f"Seeded '{employee.username}' under manager '{manager.username}'",
-        changes={"manager_id": manager.id, "employee_id": employee.id},
-    )
+    if audited:
+        _audit(
+            db,
+            today,
+            today - timedelta(days=380),
+            order,
+            actor_id=actor.id,
+            action="employee_manager.assign",
+            entity_type="employee_manager",
+            entity_id=employee.id,
+            description=f"Seeded '{employee.username}' under additional manager '{manager.username}'",
+            changes={"manager_id": manager.id, "employee_id": employee.id},
+        )
     report.add("employee_managers", True)
 
 
 def seed_organization(
-    db: Session, password: str, report: SeedReport | None = None
+    db: Session,
+    password: str,
+    report: SeedReport | None = None,
+    today: date | None = None,
 ) -> SeedReport:
-    """Create the demo admin, managers, employees, and reporting lines.
+    """Create the demo admins, managers, employees, and reporting lines.
 
-    Flushes but does not commit; the caller owns the transaction.
+    Every account shares ``password``. Flushes but does not commit; the caller owns
+    the transaction.
     """
     report = report or SeedReport()
-    password_hash = hash_password(password)
+    today = today or datetime.now(timezone.utc).date()
+    password_hash = hash_password(
+        password
+    )  # hashed once and shared by every demo account
 
-    admin = _ensure_user(
-        db,
-        report,
-        None,
-        first=ADMIN[0],
-        last=ADMIN[1],
-        title=ADMIN[2],
-        role="admin",
-        password_hash=password_hash,
-    )
-    managers = [
-        _ensure_user(
+    def make(actor_id, order, role, person):
+        first, last, title = person
+        return _ensure_user(
             db,
             report,
-            admin.id,
-            first=f,
-            last=l,
-            title=t,
-            role="manager",
+            today,
+            actor_id,
+            order,
+            first=first,
+            last=last,
+            title=title,
+            role=role,
             password_hash=password_hash,
         )
-        for f, l, t in MANAGERS
-    ]
-    employees = [
-        _ensure_user(
+
+    admins = [make(None, i, "admin", p) for i, p in enumerate(ADMINS)]
+    admin = admins[0]
+    managers = [make(admin.id, 10 + i, "manager", p) for i, p in enumerate(MANAGERS)]
+    employees = [make(admin.id, 30 + i, "employee", p) for i, p in enumerate(EMPLOYEES)]
+    for order, (employee, manager, primary) in enumerate(reporting_lines()):
+        _ensure_link(
             db,
             report,
-            admin.id,
-            first=f,
-            last=l,
-            title=t,
-            role="employee",
-            password_hash=password_hash,
+            today,
+            admin,
+            employees[employee],
+            managers[manager],
+            not primary,
+            order,
         )
-        for f, l, t in EMPLOYEES
-    ]
-    for index, employee in enumerate(employees):
-        _ensure_link(db, report, admin, employee, managers[index % len(managers)])
-        if index in SECOND_MANAGER:
-            _ensure_link(db, report, admin, employee, managers[SECOND_MANAGER[index]])
     return report
 
 
@@ -217,93 +224,6 @@ def _demo_user(db: Session, first: str, last: str) -> User:
     if user is None:
         raise RuntimeError("Demo organization is missing; seed the organization first.")
     return user
-
-
-def _midnight(day: date) -> datetime:
-    return datetime.combine(day, time.min, tzinfo=timezone.utc)
-
-
-# Each project uses only its own manager's primary employees (index % 4 == manager
-# index) and no employee is double-booked, so every row passes the scheduling rules.
-# Offsets are days relative to the seed date; assignments are (employee index, milestone
-# index, start offset, end offset, ended_at offset or None).
-DEMO_PROJECTS = [
-    {
-        "name": "Demo: Customer Portal Redesign",
-        "manager": 0,
-        "status": "active",
-        "archived": False,
-        "start": -60,
-        "end": 120,
-        "budget": "80000.00",
-        "milestones": [
-            ("Discovery and UX research", -60, -31, True),
-            ("Core build", -30, 30, False),
-            ("Beta hardening", 31, 90, False),
-        ],
-        "assignments": [
-            (0, 0, -60, -31, None),
-            (0, 1, -30, 30, None),
-            (4, 1, -20, 30, None),
-            (8, 2, 31, 90, None),
-            (0, 2, 31, 60, None),
-        ],
-    },
-    {
-        "name": "Demo: Data Platform Migration",
-        "manager": 1,
-        "status": "active",
-        "archived": False,
-        "start": -45,
-        "end": 60,
-        "budget": "120000.00",
-        "milestones": [
-            ("Source inventory", -45, -1, True),
-            ("Pipeline cutover", 0, 60, False),
-        ],
-        "assignments": [
-            (1, 0, -45, -1, None),
-            (5, 1, 0, 40, None),
-            (9, 1, 5, 60, None),
-        ],
-    },
-    {
-        "name": "Demo: Legacy CRM Sunset",
-        "manager": 2,
-        "status": "completed",
-        "archived": False,
-        "start": -200,
-        "end": -30,
-        "budget": "90000.00",
-        "milestones": [
-            ("Data export", -200, -120, True),
-            ("Decommission", -119, -30, True),
-        ],
-        "assignments": [(2, 0, -190, -125, None), (6, 1, -115, -40, None)],
-    },
-    {
-        "name": "Demo: Mobile App Prototype",
-        "manager": 3,
-        "status": "abandoned",
-        "archived": False,
-        "start": -80,
-        "end": 40,
-        "budget": "60000.00",
-        "milestones": [("Prototype build", -80, 40, False)],
-        "assignments": [(3, 0, -50, 30, -25)],
-    },
-    {
-        "name": "Demo: Intranet Refresh",
-        "manager": 0,
-        "status": "completed",
-        "archived": True,
-        "start": -320,
-        "end": -240,
-        "budget": "15000.00",
-        "milestones": [("Content migration", -320, -240, True)],
-        "assignments": [(12, 0, -300, -250, None)],
-    },
-]
 
 
 def seed_projects(
@@ -320,17 +240,20 @@ def seed_projects(
     managers = [_demo_user(db, f, l) for f, l, _ in MANAGERS]
     employees = [_demo_user(db, f, l) for f, l, _ in EMPLOYEES]
 
-    for spec in DEMO_PROJECTS:
+    def day(offset: int) -> date:
+        return today + timedelta(days=offset)
+
+    for order, spec in enumerate(DEMO_PROJECTS):
         if (
             db.scalar(select(Project.id).where(Project.name == spec["name"]))
             is not None
         ):
             report.add("projects", False)
             continue
-        day = lambda offset: today + timedelta(days=offset)  # noqa: E731
         project = Project(
             name=spec["name"],
-            description=f"Demonstration project: {spec['name'][6:]}.",
+            description=spec.get("description")
+            or f"Demonstration project: {spec['name'][6:]}.",
             manager_id=managers[spec["manager"]].id,
             created_by=admin.id,
             start_date=day(spec["start"]),
@@ -343,10 +266,11 @@ def seed_projects(
         db.add(project)
         db.flush()
         milestones = []
-        for name, start, end, completed in spec["milestones"]:
+        for name, start, end, completed, *extra in spec["milestones"]:
             milestone = Milestone(
                 project_id=project.id,
                 name=name,
+                description=extra[0] if extra else None,
                 start_date=day(start),
                 end_date=day(end),
                 status="completed" if completed else "pending",
@@ -354,6 +278,7 @@ def seed_projects(
             )
             db.add(milestone)
             milestones.append(milestone)
+            report.add("milestones", True)
         db.flush()
         for emp_idx, ms_idx, start, end, ended in spec["assignments"]:
             db.add(
@@ -367,8 +292,11 @@ def seed_projects(
             )
             report.add("assignments", True)
         db.flush()
-        record_audit(
+        _audit(
             db,
+            today,
+            day(spec["start"] - 7),
+            order,
             actor_id=admin.id,
             action="project.create",
             entity_type="project",
@@ -377,24 +305,7 @@ def seed_projects(
             changes={"after": {"name": project.name, "status": project.status}},
         )
         report.add("projects", True)
-        report.add("milestones", True)
     return report
-
-
-def _terms_plan(index: int) -> list[tuple[int, Decimal, Decimal]]:
-    """Return deterministic (effective offset in days, hourly rate, weekly hours) for an employee.
-
-    The first term predates every seeded assignment; some employees have a past raise
-    and some a scheduled future raise so historical rates are exercised.
-    """
-    rate = Decimal(45 + (index * 7) % 35)
-    hours = Decimal("32") if index % 5 == 3 else Decimal("40")
-    plan = [(-400, rate, hours)]
-    if index % 3 == 0:
-        plan.append((-100, rate + Decimal("4"), hours))
-    if index % 4 == 1:
-        plan.append((30, rate + Decimal("6"), hours))
-    return plan
 
 
 def seed_work_terms(
@@ -402,25 +313,26 @@ def seed_work_terms(
 ) -> SeedReport:
     """Create effective-dated work terms for every demo employee.
 
-    Idempotent per (employee, effective date); existing rows are never changed.
-    Requires the demo organization. Flushes but does not commit.
+    Idempotent per employee: an employee who already has any work terms is left
+    untouched, so re-running on a later day never adds shifted duplicates. Only raises
+    (terms after an employee's first) get an audit row. Requires the demo organization.
+    Flushes but does not commit.
     """
     report = report or SeedReport()
     today = today or datetime.now(timezone.utc).date()
     admin = _demo_user(db, *ADMIN[:2])
     for index, (first, last, _) in enumerate(EMPLOYEES):
         employee = _demo_user(db, first, last)
-        for offset, rate, hours in _terms_plan(index):
-            effective = today + timedelta(days=offset)
-            exists = db.scalar(
-                select(EmployeeWorkTerms.id).where(
-                    EmployeeWorkTerms.employee_id == employee.id,
-                    EmployeeWorkTerms.effective_from == effective,
-                )
+        has_terms = db.scalar(
+            select(EmployeeWorkTerms.id).where(
+                EmployeeWorkTerms.employee_id == employee.id
             )
-            if exists is not None:
+        )
+        for position, (offset, rate, hours) in enumerate(_terms_plan(index)):
+            if has_terms is not None:
                 report.add("work_terms", False)
                 continue
+            effective = today + timedelta(days=offset)
             row = EmployeeWorkTerms(
                 employee_id=employee.id,
                 hourly_rate=rate,
@@ -429,22 +341,38 @@ def seed_work_terms(
             )
             db.add(row)
             db.flush()
-            record_audit(
-                db,
-                actor_id=admin.id,
-                action="work_terms.create",
-                entity_type="employee_work_terms",
-                entity_id=row.id,
-                description=f"Seeded work terms for '{employee.username}'",
-                changes={
-                    "after": {
-                        "hourly_rate": str(rate),
-                        "weekly_hours": str(hours),
-                        "effective_from": str(effective),
-                    }
-                },
-            )
+            if position > 0:
+                _audit(
+                    db,
+                    today,
+                    effective,
+                    index,
+                    actor_id=admin.id,
+                    action="work_terms.create",
+                    entity_type="employee_work_terms",
+                    entity_id=row.id,
+                    description=f"Seeded compensation change for '{employee.username}'",
+                    changes={
+                        "after": {
+                            "hourly_rate": str(rate),
+                            "weekly_hours": str(hours),
+                            "effective_from": str(effective),
+                        }
+                    },
+                )
             report.add("work_terms", True)
+    return report
+
+
+def seed_all(db: Session, password: str) -> SeedReport:
+    """Run every seeding step in order and return the combined report.
+
+    Flushes but does not commit; the caller owns the transaction. Add new seed
+    steps here so the CLI and the Lambda maintenance action both pick them up.
+    """
+    report = seed_organization(db, password)
+    seed_work_terms(db, report)
+    seed_projects(db, report)
     return report
 
 
@@ -487,9 +415,7 @@ def main() -> None:
     )
     with SessionLocal() as db:
         try:
-            report = seed_organization(db, password)
-            seed_work_terms(db, report)
-            seed_projects(db, report)
+            report = seed_all(db, password)
             db.commit()
         except Exception:
             db.rollback()

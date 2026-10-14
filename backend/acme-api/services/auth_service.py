@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,14 +20,34 @@ password_hasher = PasswordHash.recommended()
 security = HTTPBearer()
 
 
+PLACEHOLDER_SECRETS = {"change-me-in-production", "acme-dev-secret-change-me"}
+MIN_SECRET_LENGTH = 32
+SECRET_FILE = Path(__file__).resolve().parent.parent / "jwt_secret.key"
+
+
+def _usable(secret: str, min_length: int = 1) -> bool:
+    return len(secret) >= min_length and secret not in PLACEHOLDER_SECRETS
+
+
 def get_jwt_secret() -> str:
-    """Return a non-placeholder JWT secret configured for the environment."""
+    """Return the JWT signing secret.
+
+    ``JWT_SECRET_KEY`` from the environment wins (any non-placeholder value, as before);
+    otherwise ``jwt_secret.key`` in the application directory is used and must be at
+    least 32 characters. A placeholder is never accepted, and no secret is ever
+    generated here (see ``scripts/generate_jwt_secret.py``).
+    """
     secret = settings.JWT_SECRET_KEY.strip()
-    if not secret or secret in {"change-me-in-production", "acme-dev-secret-change-me"}:
-        raise RuntimeError(
-            "JWT_SECRET_KEY must be configured in the environment before issuing JWT tokens."
-        )
-    return secret
+    if _usable(secret):
+        return secret
+    if SECRET_FILE.is_file():
+        secret = SECRET_FILE.read_text(encoding="utf-8").strip()
+        if _usable(secret, MIN_SECRET_LENGTH):
+            return secret
+    raise RuntimeError(
+        "No valid JWT secret: set JWT_SECRET_KEY or create jwt_secret.key "
+        "with `python scripts/generate_jwt_secret.py`."
+    )
 
 
 def hash_password(password: str) -> str:
