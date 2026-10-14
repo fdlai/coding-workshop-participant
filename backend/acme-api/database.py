@@ -1,6 +1,5 @@
 from collections.abc import Generator
 
-from fastapi import Depends
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -19,13 +18,14 @@ database_url = URL.create(
 
 engine = create_engine(database_url, pool_pre_ping=True)
 
-SessionLocal = sessionmaker(bind=engine, autoflush=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
-    pass
+    """Base class for all SQLAlchemy models."""
 
 
 def get_db() -> Generator[Session, None, None]:
+    """Provide a transactional database session for API requests."""
     with SessionLocal() as db:
         yield db
