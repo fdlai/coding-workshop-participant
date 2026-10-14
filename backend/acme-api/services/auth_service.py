@@ -1,10 +1,13 @@
+import base64
+import hashlib
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from pwdlib import PasswordHash
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -16,7 +19,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-password_hasher = PasswordHash.recommended()
+PBKDF2_PREFIX = "pbkdf2_sha256"
+PBKDF2_ITERATIONS = 600_000
 security = HTTPBearer()
 
 
@@ -50,14 +54,40 @@ def get_jwt_secret() -> str:
     )
 
 
+def _pbkdf2(password: str, salt: bytes, iterations: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+
+
 def hash_password(password: str) -> str:
-    """Hash a plaintext password using Argon2."""
-    return password_hasher.hash(password)
+    """Hash a password with PBKDF2-HMAC-SHA256.
+
+    PBKDF2 needs almost no memory, which matters because the Lambda has only 128 MB
+    (Argon2's 64 MB per hash exceeds it). Format: pbkdf2_sha256$iterations$salt$hash.
+    """
+    salt = secrets.token_bytes(16)
+    digest = _pbkdf2(password, salt, PBKDF2_ITERATIONS)
+    return "$".join(
+        [
+            PBKDF2_PREFIX,
+            str(PBKDF2_ITERATIONS),
+            base64.b64encode(salt).decode(),
+            base64.b64encode(digest).decode(),
+        ]
+    )
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a plaintext password against a stored hash."""
-    return password_hasher.verify(password, password_hash)
+    """Verify a password against a PBKDF2 hash, or a legacy Argon2 hash from older accounts."""
+    if password_hash.startswith(PBKDF2_PREFIX + "$"):
+        try:
+            _, iterations, salt, expected = password_hash.split("$")
+            digest = _pbkdf2(password, base64.b64decode(salt), int(iterations))
+            return hmac.compare_digest(digest, base64.b64decode(expected))
+        except ValueError:
+            return False
+    from pwdlib import PasswordHash  # legacy hashes only; imported lazily to save memory
+
+    return PasswordHash.recommended().verify(password, password_hash)
 
 
 def create_access_token(username: str) -> str:
