@@ -6,7 +6,12 @@
  * session expired, so the registered handler logs the user out.
  */
 
-const API_ROOT = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api/acme-api" : "http://localhost:8000")}/api/v1`;
+// In production the site and API share one CloudFront domain, with the API under /api/acme-api.
+// Citi's deploy script sets VITE_API_URL to the bare CloudFront URL (no API prefix), so it is
+// deliberately ignored in production builds. VITE_API_URL only applies to local development.
+const API_ROOT = `${
+  import.meta.env.PROD ? "/api/acme-api" : import.meta.env.VITE_API_URL || "http://localhost:8000"
+}/api/v1`;
 const TOKEN_KEY = "acme_token";
 
 let unauthorizedHandler = null;
