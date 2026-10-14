@@ -15,7 +15,7 @@ def handler(event, context):
     # never HTTP requests received through the public Function URL.
     if (
         isinstance(event, dict)
-        and event.get("acme_maintenance_action") == "db_status"
+        and event.get("acme_maintenance_action") in ("db_status", "db_migrate")
         and "requestContext" not in event
         and "version" not in event
         and "rawPath" not in event
@@ -32,6 +32,20 @@ def handler(event, context):
             or os.environ.get("POSTGRES_NAME") != "codingworkshop"
         ):
             raise RuntimeError("Unexpected database environment")
+
+        if event["acme_maintenance_action"] == "db_migrate":
+            from alembic import command
+            from alembic.config import Config
+
+            config = Config("/var/task/alembic.ini")
+            config.set_main_option("script_location", "/var/task/migrations")
+
+            command.upgrade(config, "fc63aed03b16")
+
+            return {
+                "status": "migration_complete",
+                "revision": "fc63aed03b16",
+            }
 
         with engine.connect() as connection:
             result = connection.execute(
