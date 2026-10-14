@@ -1,3 +1,4 @@
+import os
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
@@ -16,7 +17,13 @@ database_url = URL.create(
     database=settings.POSTGRES_NAME,
 )
 
-engine = create_engine(database_url, pool_pre_ping=True)
+engine = create_engine(
+    database_url,
+    pool_pre_ping=True,
+    connect_args={"sslmode": "require"}
+    if os.getenv("IS_LOCAL", "").lower() == "false"
+    else {},
+)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
