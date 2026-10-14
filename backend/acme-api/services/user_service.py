@@ -1,6 +1,6 @@
 """Business logic for user administration."""
 
-from datetime import date
+from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -19,6 +19,7 @@ from schemas.user import (
 )
 from services.audit_service import record_audit
 from services.auth_service import hash_password
+from services.scheduling_rules import end_open_assignments, lock_employee, utc_today
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -206,7 +207,7 @@ def _has_role_dependencies(db: Session, user: User) -> str | None:
         .where(
             MilestoneAssignment.employee_id == user.id,
             MilestoneAssignment.ended_at.is_(None),
-            MilestoneAssignment.planned_end_date >= date.today(),
+            MilestoneAssignment.planned_end_date >= utc_today(),
         )
         .limit(1)
     ) is not None:
@@ -247,8 +248,19 @@ def change_role(db: Session, actor: User, user: User, new_role: str) -> User:
     return user
 
 
-def set_active_status(db: Session, actor: User, user: User, is_active: bool) -> User:
-    """Activate or deactivate a user account."""
+def set_active_status(
+    db: Session, actor: User, user: User, is_active: bool, *, now: datetime | None = None
+) -> User:
+    """Activate or deactivate a user account.
+
+    Deactivation policy (history is never deleted):
+      * An employee's active and future assignments are ended at the start of
+        today (UTC) in the same transaction, so no scheduled work remains for
+        an account that can no longer sign in. Past work and costs are intact.
+      * A manager who still owns active, unarchived projects cannot be
+        deactivated until those projects are reassigned or closed.
+      * Reactivation never restores ended assignments; schedule them afresh.
+    """
     if user.id == actor.id and not is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -258,15 +270,42 @@ def set_active_status(db: Session, actor: User, user: User, is_active: bool) -> 
         return user
 
     try:
+        ended: list[dict[str, Any]] = []
+        if not is_active:
+            if user.role == "manager" and db.scalar(
+                select(Project.id)
+                .where(
+                    Project.manager_id == user.id,
+                    Project.status == "active",
+                    Project.is_archived.is_(False),
+                )
+                .limit(1)
+            ) is not None:
+                raise _conflict(
+                    "Reassign or close the manager's active projects before deactivating them"
+                )
+            if user.role == "employee":
+                lock_employee(db, user.id)
+                ended = end_open_assignments(db, today=utc_today(now), employee_id=user.id)
+
         user.is_active = is_active
+        changes: dict[str, Any] = {
+            "before": {"is_active": not is_active},
+            "after": {"is_active": is_active},
+        }
+        if ended:
+            changes["ended_assignments"] = ended
         record_audit(
             db,
             actor_id=actor.id,
             action="user.activate" if is_active else "user.deactivate",
             entity_type="user",
             entity_id=user.id,
-            description=f"{'Activated' if is_active else 'Deactivated'} account '{user.username}'",
-            changes={"before": {"is_active": not is_active}, "after": {"is_active": is_active}},
+            description=(
+                f"{'Activated' if is_active else 'Deactivated'} account '{user.username}'"
+                + (f"; ended {len(ended)} open assignment(s)" if ended else "")
+            ),
+            changes=changes,
         )
         db.commit()
     except Exception:

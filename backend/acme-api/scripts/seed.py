@@ -15,16 +15,22 @@ Safety properties:
     ``SEED_ALLOW_PRODUCTION=yes`` is also set.
   * The demo password comes from the environment, never from source code.
 
-Later phases add projects, milestones, assignments, and compensation here.
+Seeds the organization plus demo projects, milestones, and assignments; later phases
+add compensation data.
 """
 
 import argparse
 import os
 from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from models.assignment import MilestoneAssignment
+from models.milestone import Milestone
+from models.project import Project
 from models.user import EmployeeManager, User
 from services.audit_service import record_audit
 from services.auth_service import hash_password
@@ -162,6 +168,118 @@ def seed_organization(db: Session, password: str, report: SeedReport | None = No
     return report
 
 
+def _demo_user(db: Session, first: str, last: str) -> User:
+    user = db.scalar(select(User).where(User.username == demo_username(first, last)))
+    if user is None:
+        raise RuntimeError("Demo organization is missing; seed the organization first.")
+    return user
+
+
+def _midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+
+# Each project uses only its own manager's primary employees (index % 4 == manager
+# index) and no employee is double-booked, so every row passes the scheduling rules.
+# Offsets are days relative to the seed date; assignments are (employee index, milestone
+# index, start offset, end offset, ended_at offset or None).
+DEMO_PROJECTS = [
+    {
+        "name": "Demo: Customer Portal Redesign", "manager": 0, "status": "active", "archived": False,
+        "start": -60, "end": 120, "budget": "185000.00",
+        "milestones": [("Discovery and UX research", -60, -31, True), ("Core build", -30, 30, False),
+                       ("Beta hardening", 31, 90, False)],
+        "assignments": [(0, 0, -60, -31, None), (0, 1, -30, 30, None), (4, 1, -20, 30, None),
+                        (8, 2, 31, 90, None), (0, 2, 31, 60, None)],
+    },
+    {
+        "name": "Demo: Data Platform Migration", "manager": 1, "status": "active", "archived": False,
+        "start": -45, "end": 60, "budget": "240000.00",
+        "milestones": [("Source inventory", -45, -1, True), ("Pipeline cutover", 0, 60, False)],
+        "assignments": [(1, 0, -45, -1, None), (5, 1, 0, 40, None), (9, 1, 5, 60, None)],
+    },
+    {
+        "name": "Demo: Legacy CRM Sunset", "manager": 2, "status": "completed", "archived": False,
+        "start": -200, "end": -30, "budget": "90000.00",
+        "milestones": [("Data export", -200, -120, True), ("Decommission", -119, -30, True)],
+        "assignments": [(2, 0, -190, -125, None), (6, 1, -115, -40, None)],
+    },
+    {
+        "name": "Demo: Mobile App Prototype", "manager": 3, "status": "abandoned", "archived": False,
+        "start": -80, "end": 40, "budget": "60000.00",
+        "milestones": [("Prototype build", -80, 40, False)],
+        "assignments": [(3, 0, -50, 30, -25)],
+    },
+    {
+        "name": "Demo: Intranet Refresh", "manager": 0, "status": "completed", "archived": True,
+        "start": -320, "end": -240, "budget": "45000.00",
+        "milestones": [("Content migration", -320, -240, True)],
+        "assignments": [(12, 0, -300, -250, None)],
+    },
+]
+
+
+def seed_projects(
+    db: Session, report: SeedReport | None = None, today: date | None = None
+) -> SeedReport:
+    """Create demo projects, milestones, and assignments relative to ``today``.
+
+    Idempotent by project name: an existing project (and everything under it) is left
+    untouched. Requires the demo organization. Flushes but does not commit.
+    """
+    report = report or SeedReport()
+    today = today or datetime.now(timezone.utc).date()
+    admin = _demo_user(db, *ADMIN[:2])
+    managers = [_demo_user(db, f, l) for f, l, _ in MANAGERS]
+    employees = [_demo_user(db, f, l) for f, l, _ in EMPLOYEES]
+
+    for spec in DEMO_PROJECTS:
+        if db.scalar(select(Project.id).where(Project.name == spec["name"])) is not None:
+            report.add("projects", False)
+            continue
+        day = lambda offset: today + timedelta(days=offset)  # noqa: E731
+        project = Project(
+            name=spec["name"],
+            description=f"Demonstration project: {spec['name'][6:]}.",
+            manager_id=managers[spec["manager"]].id,
+            created_by=admin.id,
+            start_date=day(spec["start"]),
+            estimated_end_date=day(spec["end"]),
+            estimated_budget=Decimal(spec["budget"]),
+            status=spec["status"],
+            is_archived=spec["archived"],
+            archived_at=_midnight(day(spec["end"])) if spec["archived"] else None,
+        )
+        db.add(project)
+        db.flush()
+        milestones = []
+        for name, start, end, completed in spec["milestones"]:
+            milestone = Milestone(
+                project_id=project.id, name=name, start_date=day(start), end_date=day(end),
+                status="completed" if completed else "pending",
+                completed_at=_midnight(day(end)) if completed else None,
+            )
+            db.add(milestone)
+            milestones.append(milestone)
+        db.flush()
+        for emp_idx, ms_idx, start, end, ended in spec["assignments"]:
+            db.add(MilestoneAssignment(
+                milestone_id=milestones[ms_idx].id, employee_id=employees[emp_idx].id,
+                start_date=day(start), planned_end_date=day(end),
+                ended_at=_midnight(day(ended)) if ended is not None else None,
+            ))
+            report.add("assignments", True)
+        db.flush()
+        record_audit(
+            db, actor_id=admin.id, action="project.create", entity_type="project",
+            entity_id=project.id, description=f"Seeded demo project '{project.name}'",
+            changes={"after": {"name": project.name, "status": project.status}},
+        )
+        report.add("projects", True)
+        report.add("milestones", True)
+    return report
+
+
 def _print_report(report: SeedReport, applied: bool) -> None:
     verb = "Created" if applied else "Would create"
     print(f"{verb}: {report.created or 'nothing'}")
@@ -185,6 +303,7 @@ def main() -> None:
     with SessionLocal() as db:
         try:
             report = seed_organization(db, password)
+            seed_projects(db, report)
             if args.apply:
                 db.commit()
             else:

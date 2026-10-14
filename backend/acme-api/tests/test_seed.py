@@ -1,8 +1,14 @@
 """Tests for the incremental, idempotent demo seed utility."""
 
+from datetime import date
+
+from models.assignment import MilestoneAssignment
 from models.audit_log import AuditLog
+from models.milestone import Milestone
+from models.project import Project
 from models.user import EmployeeManager, User
-from scripts.seed import EMPLOYEES, MANAGERS, seed_organization
+from scripts.seed import DEMO_PROJECTS, EMPLOYEES, MANAGERS, seed_organization, seed_projects
+from services.scheduling_rules import effective_window, ranges_overlap
 
 
 def test_seed_creates_organization_and_is_idempotent(db):
@@ -45,3 +51,40 @@ def test_seeded_logins_work(client, db):
         "/api/v1/auth/login", json={"username": "demo.avery.brooks", "password": "DemoPass123!"}
     )
     assert response.status_code == 200
+
+
+def test_seed_projects_is_idempotent_and_conflict_free(db):
+    today = date(2030, 6, 12)
+    seed_organization(db, "DemoPass123!")
+    first = seed_projects(db, today=today)
+    db.commit()
+    assert first.created["projects"] == len(DEMO_PROJECTS)
+    counts = (db.query(Project).count(), db.query(Milestone).count(), db.query(MilestoneAssignment).count())
+
+    second = seed_projects(db, today=today)
+    db.commit()
+    assert "projects" not in second.created
+    assert counts == (db.query(Project).count(), db.query(Milestone).count(), db.query(MilestoneAssignment).count())
+
+    statuses = {(p.status, p.is_archived) for p in db.query(Project)}
+    assert {("active", False), ("completed", False), ("abandoned", False), ("completed", True)} <= statuses
+
+    by_employee: dict[int, list[tuple[date, date]]] = {}
+    for a in db.query(MilestoneAssignment):
+        window = effective_window(a, a.milestone)
+        if window:
+            by_employee.setdefault(a.employee_id, []).append(window)
+    for windows in by_employee.values():
+        for i, (s1, e1) in enumerate(windows):
+            for s2, e2 in windows[i + 1:]:
+                assert not ranges_overlap(s1, e1, s2, e2)
+
+
+def test_seeded_assignments_respect_organization_and_milestones(db):
+    seed_organization(db, "DemoPass123!")
+    seed_projects(db, today=date(2030, 6, 12))
+    db.commit()
+    for a in db.query(MilestoneAssignment):
+        project = a.milestone.project
+        assert db.get(EmployeeManager, (a.employee_id, project.manager_id)) is not None
+        assert a.milestone.start_date <= a.start_date <= a.planned_end_date <= a.milestone.end_date

@@ -1,23 +1,17 @@
 """Business logic for employee-manager organizational relationships."""
 
-from datetime import date, datetime, time, timezone
+from datetime import datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from models.assignment import MilestoneAssignment
-from models.milestone import Milestone
-from models.project import Project
 from models.user import EmployeeManager, User
+from services import clock
 from services.audit_service import record_audit
+from services.scheduling_rules import end_open_assignments, lock_employee, utc_today
 from services.user_service import get_user_or_404
-
-
-def _aware(value: datetime) -> datetime:
-    """Treat naive datetimes (e.g. from SQLite) as UTC for comparison."""
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def get_manager_or_404(db: Session, manager_id: int) -> User:
@@ -124,9 +118,8 @@ def remove_employee(
     ``ended_at`` precedes its ``start_date`` represents cancelled future work.
     Returns the ids of the assignments that were ended.
     """
-    now = now or datetime.now(timezone.utc)
-    today: date = now.date()
-    cutoff = datetime.combine(today, time.min, tzinfo=timezone.utc)
+    now = now or clock.utc_now()
+    today = utc_today(now)
 
     link = db.get(EmployeeManager, (employee_id, manager_id))
     if link is None:
@@ -137,33 +130,11 @@ def remove_employee(
     manager = db.get(User, manager_id)
     employee = db.get(User, employee_id)
 
-    candidates = db.execute(
-        select(MilestoneAssignment)
-        .join(Milestone, Milestone.id == MilestoneAssignment.milestone_id)
-        .join(Project, Project.id == Milestone.project_id)
-        .where(
-            MilestoneAssignment.employee_id == employee_id,
-            Project.manager_id == manager_id,
-            MilestoneAssignment.planned_end_date >= today,
-        )
-        .order_by(MilestoneAssignment.id)
-    ).scalars()
-
-    ended: list[dict] = []
     try:
-        for assignment in candidates:
-            previous = assignment.ended_at
-            if previous is not None and _aware(previous) <= cutoff:
-                continue
-            assignment.ended_at = cutoff
-            ended.append(
-                {
-                    "assignment_id": assignment.id,
-                    "milestone_id": assignment.milestone_id,
-                    "previous_ended_at": previous.isoformat() if previous else None,
-                    "new_ended_at": cutoff.isoformat(),
-                }
-            )
+        lock_employee(db, employee_id)
+        ended = end_open_assignments(
+            db, today=today, employee_id=employee_id, manager_id=manager_id
+        )
 
         db.delete(link)
         record_audit(
