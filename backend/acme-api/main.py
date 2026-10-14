@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from routers.assignments import router as assignments_router
+from routers.audit import router as audit_router
 from routers.auth import router as auth_router
+from routers.dashboard import router as dashboard_router
 from routers.milestones import router as milestones_router
 from routers.projects import router as projects_router
 from routers.relationships import router as relationships_router
@@ -35,3 +37,5 @@ app.include_router(projects_router, prefix="/api/v1")
 app.include_router(milestones_router, prefix="/api/v1")
 app.include_router(assignments_router, prefix="/api/v1")
 app.include_router(work_terms_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
