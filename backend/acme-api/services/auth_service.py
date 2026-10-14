@@ -11,7 +11,9 @@ from config import settings
 from database import get_db
 from models.user import User
 from schemas.user import normalize_username
+from dotenv import load_dotenv
 
+load_dotenv()
 
 password_hasher = PasswordHash.recommended()
 security = HTTPBearer()
@@ -48,7 +50,9 @@ def create_access_token(username: str) -> str:
 def decode_access_token(token: str) -> str:
     """Validate a JWT and return its subject."""
     try:
-        payload = jwt.decode(token, get_jwt_secret(), algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, get_jwt_secret(), algorithms=[settings.JWT_ALGORITHM]
+        )
         username = payload.get("sub")
         if username is None:
             raise ValueError("Missing subject in token")
