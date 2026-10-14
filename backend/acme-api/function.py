@@ -40,11 +40,11 @@ def handler(event, context):
             config = Config("/var/task/alembic.ini")
             config.set_main_option("script_location", "/var/task/migrations")
 
-            command.upgrade(config, "fc63aed03b16")
+            command.upgrade(config, "head")
 
             return {
                 "status": "migration_complete",
-                "revision": "fc63aed03b16",
+                "target": "head",
             }
 
         with engine.connect() as connection:
