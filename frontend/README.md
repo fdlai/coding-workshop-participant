@@ -40,7 +40,7 @@ To run your application locally:
 ./bin/start-dev.sh
 ```
 
-To view your application, open the browser and navigate to `http://localhost:3000`.
+To view your application, open the browser and navigate to `http://localhost:5173`.
 
 ### Cloud Deployment
 
