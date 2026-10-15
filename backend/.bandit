@@ -1,0 +1,4 @@
+# Read by the "Security Check - Python" workflow (bandit -r ./backend).
+# Tests use assert and fixed fake credentials by design; the virtualenv is third-party code.
+[bandit]
+exclude = ./backend/acme-api/tests,./backend/acme-api/.venv

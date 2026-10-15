@@ -1,0 +1,25 @@
+# Tooling configuration only (the Lambda is packaged from requirements.txt, not this file).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = [
+    "tests/*",
+    "migrations/*",
+    "alembic/*",
+    ".venv/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

@@ -11,7 +11,7 @@ import { assignmentDisplayState, formatDate, fullName } from '../../utils/format
 /**
  * Employees tab: every assignment in the project (one row per assignment, history
  * included). Managers/admins can assign, edit, end and transfer. Employees see
- * only their own rows (the API filters them).
+ * the project's rows read-only, including teammates' (no cost data is included).
  */
 export default function EmployeesTab({ project, canSchedule, isAdmin, onChanged }) {
   const load = useCallback(async () => {

@@ -12,6 +12,7 @@ from models.milestone import Milestone
 from models.project import Project
 from models.user import EmployeeManager
 from services import relationship_service
+from services.scheduling_rules import as_utc
 from tests.conftest import login_headers, make_user
 
 
@@ -54,7 +55,7 @@ def _assign(db, milestone, employee, start, end, ended_at=None):
 
 def _ended_at(assignment):
     value = assignment.ended_at
-    return None if value is None else value.replace(tzinfo=timezone.utc)
+    return None if value is None else as_utc(value)
 
 
 def _cast(db):

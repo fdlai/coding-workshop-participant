@@ -110,6 +110,64 @@ Starts the complete development environment with hot-reload.
 ./bin/start-dev.sh
 ```
 
+### `test-backend.sh`
+
+Runs the `backend/acme-api` pytest suite with code coverage (fails below 80%).
+
+**What it does**:
+
+* Uses the backend virtualenv (`.venv/Scripts/python` on Windows Git Bash, `.venv/bin/python` elsewhere); on a fresh machine it creates `.venv`, installs `requirements.txt` + `requirements-dev.txt` and copies `.env.sample` to `.env` (shared with `test-e2e.sh` and `test-load.sh` via `backend-env-lib.sh`)
+* Default: runs every test on an isolated in-memory SQLite database
+* `--postgres`: creates the disposable `acme_test` database if missing (credentials from `backend/acme-api/.env`) and runs the same suite plus PostgreSQL-only integration tests (Alembic migrations, timestamps, Decimal precision, constraints) against it
+* Never touches the application database; the test fixtures refuse any database whose name does not end in `_test`
+
+**Usage**:
+
+```sh
+./bin/test-backend.sh                 # SQLite
+./bin/test-backend.sh --postgres      # PostgreSQL (acme_test, or $TEST_DB_NAME)
+./bin/test-backend.sh -k budget -x    # extra arguments go to pytest
+```
+
+### `test-e2e.sh`
+
+Runs the Cypress end-to-end suite (`frontend/cypress/e2e/`) through the real UI, API and PostgreSQL.
+
+**What it does**:
+
+* Recreates the disposable database `acme_e2e`, runs Alembic migrations and seeds demo data (the dev database is never touched)
+* Starts the FastAPI backend on port 8000 and Vite on port 5173 against it
+* Runs `npx cypress run` (headless Electron), passing a throw-away demo password to the tests
+* Stops both servers when the run finishes, fails or is interrupted
+* Refuses to start if port 8000 or 5173 is already in use, so it never tests the wrong server
+
+**Usage**:
+
+```sh
+./bin/test-e2e.sh                                          # whole suite
+./bin/test-e2e.sh --spec cypress/e2e/01-auth.cy.js         # one spec
+BACKEND_PORT=8001 FRONTEND_PORT=5174 ./bin/test-e2e.sh     # next to running dev servers
+```
+
+### `test-load.sh`
+
+Load-tests the API with Artillery (`tests/load/api-load.yml`) and records performance metrics. See `tests/load/README.md`.
+
+**What it does**:
+
+* Recreates and seeds `acme_e2e`, starts the backend on port 8000
+* Samples backend CPU and memory every second while `npx artillery@2.0.34 run` executes
+* Writes the JSON report, resource CSV and a p50/p95/p99, RPS and error-rate summary to `tests/load/reports/`
+* Exits non-zero when a latency or error-rate threshold is violated
+
+**Usage**:
+
+```sh
+./bin/test-load.sh
+```
+
+Both scripts share their database and server helpers in `test-stack-lib.sh`.
+
 ### `generate-env.sh`
 
 Generates `.env.local` file for React frontend.

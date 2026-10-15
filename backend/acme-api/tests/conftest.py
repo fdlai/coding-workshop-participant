@@ -1,4 +1,13 @@
-"""Shared, isolated test fixtures (in-memory SQLite only; never the real database)."""
+"""Shared, isolated test fixtures. Never touches the real application database.
+
+By default every test runs on in-memory SQLite. Set ``TEST_DATABASE_URL`` to run the
+whole suite against a disposable PostgreSQL database instead, e.g.::
+
+    TEST_DATABASE_URL=postgresql+psycopg://postgres:pw@localhost:5432/acme_test
+
+The URL is refused unless it is PostgreSQL and its database name ends with ``_test``
+(and differs from the application's ``POSTGRES_NAME``), so ``acme_db`` is never used.
+"""
 
 import os
 from datetime import date, datetime, timezone
@@ -9,9 +18,11 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-auth-secret-key-1234567890")
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import close_all_sessions, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from config import settings
 from database import Base, get_db
 from main import app
 from models.milestone import Milestone
@@ -21,11 +32,33 @@ from models.work_terms import EmployeeWorkTerms
 from services.auth_service import hash_password
 
 
-engine = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
+
+
+def assert_safe_test_database_url(url: str) -> str:
+    """Return the database name of ``url`` or raise if it is not clearly a disposable test DB."""
+    parsed = make_url(url)
+    name = parsed.database or ""
+    if parsed.get_backend_name() != "postgresql":
+        raise RuntimeError(f"TEST_DATABASE_URL must be a PostgreSQL URL, got {parsed.get_backend_name()!r}")
+    if not name.endswith("_test") or name == settings.POSTGRES_NAME or name == "acme_db":
+        raise RuntimeError(
+            f"Refusing to run tests against database {name!r}: TEST_DATABASE_URL must name a "
+            "disposable database ending in '_test' (never the application database)."
+        )
+    return name
+
+
+if TEST_DATABASE_URL:
+    assert_safe_test_database_url(TEST_DATABASE_URL)
+    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
+else:
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+IS_POSTGRES = engine.dialect.name == "postgresql"
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 PASSWORD = "Password123!"
@@ -67,11 +100,16 @@ def make_user(session, username: str, role: str, **overrides) -> User:
 @pytest.fixture(scope="function")
 def setup_db():
     """Create tables, seed a default admin, and drop everything afterwards."""
+    if IS_POSTGRES:
+        # A previous interrupted run may have left tables (and id sequences) behind.
+        Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     session = TestingSessionLocal()
     make_user(session, "adminuser", "admin", email="admin@example.com", job_title="Administrator")
     session.close()
     yield
+    # Sessions a test left open would hold PostgreSQL locks and block DROP TABLE.
+    close_all_sessions()
     Base.metadata.drop_all(bind=engine)
 
 

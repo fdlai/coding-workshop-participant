@@ -3,7 +3,8 @@
 * The compile test runs everywhere and proves the lock statement is a PostgreSQL
   ``FOR NO KEY UPDATE`` (SQLite silently ignores row locks, so it cannot prove
   serialization).
-* The threaded test is opt-in. It needs a *dedicated, disposable* PostgreSQL
+* The threaded test is opt-in (TEST_DATABASE_URL or ACME_TEST_POSTGRES_URL; it runs
+  automatically under ``bin/test-backend.sh --postgres``). It needs a *dedicated, disposable* PostgreSQL
   database whose name contains "test" and is never ``acme_db``:
 
       $env:ACME_TEST_POSTGRES_URL = "postgresql+psycopg://user:pw@localhost:5432/acme_concurrency_test"
@@ -32,7 +33,7 @@ from services import assignment_service
 from services.audit_service import record_audit
 from tests.conftest import make_milestone, make_project, make_terms, make_user
 
-PG_URL = os.environ.get("ACME_TEST_POSTGRES_URL")
+PG_URL = os.environ.get("ACME_TEST_POSTGRES_URL") or os.environ.get("TEST_DATABASE_URL")
 
 
 def test_employee_lock_statement_is_for_no_key_update():
@@ -64,7 +65,7 @@ def _guard(url: str) -> None:
         pytest.fail(f"Refusing to run against database {name!r}: name must contain 'test' and not be acme_db")
 
 
-@pytest.mark.skipif(not PG_URL, reason="set ACME_TEST_POSTGRES_URL to a disposable *test* PostgreSQL database")
+@pytest.mark.skipif(not PG_URL, reason="set TEST_DATABASE_URL (or ACME_TEST_POSTGRES_URL) to a disposable *test* PostgreSQL database")
 def test_concurrent_creates_for_same_employee_are_serialized(monkeypatch):
     _guard(PG_URL)
     engine = create_engine(PG_URL)

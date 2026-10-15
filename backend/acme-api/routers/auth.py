@@ -31,7 +31,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     token = create_access_token(user.username)
     return TokenResponse(
         access_token=token,
-        token_type="bearer",
+        token_type="bearer",  # nosec B106 - OAuth2 token type, not a password
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 

@@ -259,3 +259,9 @@ tfplan
 /specifications.md
 
 ACME-Image.png
+# Test runner output
+tests/.logs/
+tests/load/reports/
+frontend/cypress/screenshots/
+frontend/cypress/videos/
+frontend/cypress/downloads/

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from config import settings
 from main import app
 from models.audit_log import AuditLog
 from models.user import EmployeeManager, User
@@ -277,5 +278,11 @@ def test_login_username_is_case_insensitive(client, db):
 
 def test_sessions_are_isolated_to_test_database():
     session = TestingSessionLocal()
-    assert session.bind.dialect.name == "sqlite"
-    session.close()
+    try:
+        if session.bind.dialect.name == "postgresql":
+            assert session.bind.url.database.endswith("_test")
+            assert session.bind.url.database != settings.POSTGRES_NAME
+        else:
+            assert session.bind.dialect.name == "sqlite"
+    finally:
+        session.close()

@@ -66,7 +66,7 @@ def list_milestone_assignments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[AssignmentOut]:
-    """List assignments (employees see only their own)."""
+    """List assignments (employees on the project also see their teammates)."""
     milestone = get_milestone_or_404(db, milestone_id)
     return assignment_service.list_assignments(db, current_user, milestone, utc_today())
 

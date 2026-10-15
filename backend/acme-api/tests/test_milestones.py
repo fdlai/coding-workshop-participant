@@ -1,5 +1,6 @@
 """Milestone date validation and completion workflow tests."""
 
+from services.scheduling_rules import as_utc
 from tests.conftest import login_headers
 
 API = "/api/v1"
@@ -121,7 +122,7 @@ def test_cancel_ends_open_assignments_and_keeps_history(client, world, db):
     db.expire_all()
     rows = db.query(MilestoneAssignment).order_by(MilestoneAssignment.id).all()
     assert len(rows) == 2  # history is never deleted
-    assert all(row.ended_at is not None and row.ended_at.date().isoformat() == "2030-06-12" for row in rows)
+    assert all(row.ended_at is not None and as_utc(row.ended_at).date().isoformat() == "2030-06-12" for row in rows)
 
     # Cancelled milestones are final: no edit, completion, reopening or deletion with history.
     url = f"{API}/milestones/{world.milestone.id}/status"

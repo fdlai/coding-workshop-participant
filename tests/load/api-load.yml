@@ -1,0 +1,160 @@
+# Artillery load test for the ACME FastAPI backend.
+#
+# Run with ./bin/test-load.sh (starts a seeded backend on the acme_e2e database),
+# or against an already-running API:
+#   LOAD_TEST_PASSWORD=<seeded demo password> \
+#     npx artillery@2.0.34 run --target http://127.0.0.1:8000 \
+#     --output tests/load/reports/report.json tests/load/api-load.yml
+#
+# Login uses PBKDF2 (600k iterations, ~100 ms of CPU by design), so every virtual
+# user signs in ONCE and then loops over read-heavy endpoints with think time,
+# like a real person clicking around the dashboard.
+config:
+  target: "http://127.0.0.1:8000"
+  http:
+    timeout: 10            # seconds; a request slower than this counts as an error
+  phases:
+    - name: warm-up
+      duration: 20
+      arrivalRate: 1
+    - name: ramp-up
+      duration: 40
+      arrivalRate: 1
+      rampTo: 4
+    - name: sustained-high-concurrency
+      duration: 90
+      arrivalRate: 4
+  payload:
+    # One row per virtual user: an admin, a manager and an employee username.
+    # Each scenario uses the column for its role. All seeded demo accounts share
+    # the password passed in LOAD_TEST_PASSWORD.
+    path: "users.csv"
+    fields: ["admin", "manager", "employee"]
+    order: random
+    skipHeader: false
+  variables:
+    password: "{{ $env.LOAD_TEST_PASSWORD }}"
+  plugins:
+    ensure: {}
+    metrics-by-endpoint:
+      useOnlyRequestNames: true
+  # Pass/fail gates (validated locally; see tests/load/README.md). The run exits
+  # non-zero when any of them is violated.
+  ensure:
+    thresholds:
+      # Baseline at sustained 4 arrivals/s on a dev laptop (2 runs): overall p95 156-191 ms,
+      # p99 252-290 ms; login p95 279-308 ms. Limits leave ~1.5x headroom for machine noise
+      # and fail on a ~2x slowdown. At 6 arrivals/s the API stalls and the run fails.
+      - "http.response_time.p95": 300
+      - "http.response_time.p99": 500
+      - "plugins.metrics-by-endpoint.response_time.POST /auth/login.p95": 600
+      - "plugins.metrics-by-endpoint.response_time.GET /dashboard/manager.p95": 400
+      - "plugins.metrics-by-endpoint.response_time.GET /projects.p95": 250
+      - "plugins.metrics-by-endpoint.response_time.GET /projects/{id}/budget.p95": 300
+    conditions:
+      # Error rate below 1% of requests, and no failed virtual users at all.
+      - expression: "(http.codes.200 / http.requests) > 0.99"
+        strict: true
+      - expression: "vusers.failed == 0"
+        strict: true
+
+scenarios:
+  - name: Health check
+    weight: 1
+    flow:
+      - loop:
+          - get:
+              url: "/health"
+              name: "GET /health"
+          - think: 1
+        count: 10
+
+  - name: Admin browsing
+    weight: 2
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          name: "POST /auth/login"
+          json:
+            username: "{{ admin }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.access_token"
+            as: "token"
+      - loop:
+          - get:
+              url: "/api/v1/dashboard/admin"
+              name: "GET /dashboard/admin"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - get:
+              url: "/api/v1/projects?limit=200"
+              name: "GET /projects"
+              headers: { Authorization: "Bearer {{ token }}" }
+              capture:
+                json: "$[0].id"
+                as: "projectId"
+          - get:
+              url: "/api/v1/projects/{{ projectId }}/budget"
+              name: "GET /projects/{id}/budget"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - get:
+              url: "/api/v1/users?limit=200"
+              name: "GET /users"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - think: 1
+        count: 8
+
+  - name: Manager browsing
+    weight: 4
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          name: "POST /auth/login"
+          json:
+            username: "{{ manager }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.access_token"
+            as: "token"
+      - loop:
+          - get:
+              url: "/api/v1/dashboard/manager"
+              name: "GET /dashboard/manager"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - get:
+              url: "/api/v1/projects?limit=200"
+              name: "GET /projects"
+              headers: { Authorization: "Bearer {{ token }}" }
+              capture:
+                json: "$[0].id"
+                as: "projectId"
+          - get:
+              url: "/api/v1/projects/{{ projectId }}/budget"
+              name: "GET /projects/{id}/budget"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - think: 1
+        count: 8
+
+  - name: Employee browsing
+    weight: 3
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          name: "POST /auth/login"
+          json:
+            username: "{{ employee }}"
+            password: "{{ password }}"
+          capture:
+            json: "$.access_token"
+            as: "token"
+      - loop:
+          - get:
+              url: "/api/v1/dashboard/employee"
+              name: "GET /dashboard/employee"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - get:
+              url: "/api/v1/projects?limit=200"
+              name: "GET /projects"
+              headers: { Authorization: "Bearer {{ token }}" }
+          - think: 1
+        count: 8
