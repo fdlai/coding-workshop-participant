@@ -1,6 +1,7 @@
 """Tests for the deterministic, idempotent, transactional demo seed dataset."""
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -17,6 +18,9 @@ from scripts.seed import (
     DEMO_PROJECTS,
     EMPLOYEES,
     MANAGERS,
+    SHOWCASE_DEACTIVATED,
+    SHOWCASE_EMPLOYEES,
+    SHOWCASE_PROJECT,
     demo_username,
     seed_all,
     seed_organization,
@@ -24,6 +28,7 @@ from scripts.seed import (
     seed_work_terms,
 )
 from services.cost_service import calculate_project_costs, money
+from services.budget_service import budget_health
 from services.scheduling_rules import effective_window, ranges_overlap
 
 PASSWORD = "DemoPass123!"
@@ -55,16 +60,16 @@ def test_expected_row_counts_per_table(db):
     db.commit()
     added = [after - b for after, b in zip(counts(db), before)]
 
-    assert added[0] == 100 == len(ADMINS) + len(MANAGERS) + len(EMPLOYEES)
+    assert added[0] == 104 == len(ADMINS) + len(MANAGERS) + len(EMPLOYEES) + len(SHOWCASE_EMPLOYEES)
     assert 80 <= added[1] <= 120
     assert 100 <= added[2] <= 150
-    assert 35 <= added[3] <= 45 and added[3] == len(DEMO_PROJECTS)
+    assert 35 <= added[3] <= 45 and added[3] == len(DEMO_PROJECTS) + 1  # plus the showcase
     assert 150 <= added[4] <= 200
     assert 300 <= added[5] <= 450
     assert 150 <= added[6] <= 250
     assert report.created["users:admin"] == len(ADMINS)
     assert report.created["users:manager"] == len(MANAGERS)
-    assert report.created["users:employee"] == len(EMPLOYEES)
+    assert report.created["users:employee"] == len(EMPLOYEES) + len(SHOWCASE_EMPLOYEES)
     assert report.created["milestones"] == added[4]
     assert report.created["assignments"] == added[5]
 
@@ -104,8 +109,8 @@ def test_role_distribution_and_accounts(seeded):
     demo = seeded.query(User).filter(User.username.like("demo.%"))
     assert demo.filter(User.role == "admin").count() == 3
     assert demo.filter(User.role == "manager").count() == 12
-    assert demo.filter(User.role == "employee").count() == 85
-    assert demo.filter(User.is_active.is_(False)).count() == 0
+    assert demo.filter(User.role == "employee").count() == 89
+    assert demo.filter(User.is_active.is_(False)).count() == len(SHOWCASE_DEACTIVATED)
     assert ADMIN[:2] == ("Avery", "Brooks")
     assert demo_username("Avery", "Brooks") == "demo.avery.brooks"
 
@@ -177,6 +182,19 @@ def test_work_terms_are_historical_and_price_every_assignment(seeded):
     assert healths == {"over", "under"}
 
 
+def test_active_projects_show_every_budget_health_state(seeded):
+    today = date.today()
+    active = [p for p in seeded.query(Project) if p.status == "active" and not p.is_archived]
+    costs = calculate_project_costs(seeded, [p.id for p in active], today)
+    health = [
+        budget_health(money(costs[p.id].total.accrued) + money(costs[p.id].total.projected), p.estimated_budget)
+        for p in active
+    ]
+    assert health.count("over_budget") >= 3
+    assert health.count("at_risk") >= 2
+    assert health.count("on_track") >= 8
+
+
 def test_audit_logs_are_clearly_synthetic_and_consistent(seeded):
     rows = seeded.query(AuditLog).filter(AuditLog.description.like("[Synthetic seed data]%")).all()
     assert len(rows) >= 150
@@ -184,7 +202,7 @@ def test_audit_logs_are_clearly_synthetic_and_consistent(seeded):
     for row in rows:
         assert row.changes["synthetic_seed"] is True
         assert row.actor_id in users
-        assert row.created_at.date() <= date.today()
+        assert row.created_at.date() <= datetime.now(timezone.utc).date()
     blob = " ".join(str(r.changes) for r in rows).lower()
     assert "password" not in blob and "hash" not in blob
 
@@ -231,3 +249,71 @@ def test_role_permissions_for_seeded_accounts(client, seeded):
     manager_projects = client.get("/api/v1/projects", headers=manager).json()
     assert manager_projects
     assert all(p["manager_id"] == manager_id for p in manager_projects)
+
+
+# ------------------------------------------------------------------ showcase project
+
+
+def showcase_budget(client, seeded, headers):
+    project = seeded.query(Project).filter(Project.name == SHOWCASE_PROJECT["name"]).one()
+    response = client.get(f"/api/v1/projects/{project.id}/budget", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    return body, {m["name"][:1]: m for m in body["milestones"]}  # keyed "1".."4"
+
+
+def showcase_user(seeded, first, last):
+    return seeded.query(User).filter(User.username == demo_username(first, last)).one()
+
+
+def test_showcase_budget_matches_the_hand_calculation(client, seeded):
+    _, by_scenario = showcase_budget(client, seeded, login(client, "Morgan", "Hayes"))
+
+    # Finished scenarios are fully accrued, whatever day of the week the demo runs.
+    expected = {"1": "5000.00", "2": "2000.00", "3": "4000.00"}
+    for scenario, total in expected.items():
+        milestone = by_scenario[scenario]
+        assert milestone["accrued_cost"] == total and milestone["projected_cost"] == "0.00"
+    live = by_scenario["4"]
+    assert Decimal(live["accrued_cost"]) + Decimal(live["projected_cost"]) == Decimal("8000.00")
+
+    assert not showcase_user(seeded, "Riley", "Shaw").is_active
+    terms = seeded.query(EmployeeWorkTerms).filter(
+        EmployeeWorkTerms.employee_id == showcase_user(seeded, "Jordan", "Raines").id
+    )
+    assert sorted(t.hourly_rate for t in terms) == [Decimal("50.00"), Decimal("75.00")]
+
+
+def test_showcase_live_demo_steps(client, seeded):
+    """Rehearses the live part of the demo: only projected cost may move."""
+    admin = login(client, "Avery", "Brooks")
+    drew = showcase_user(seeded, "Drew", "Kendall")
+    before, scenarios = showcase_budget(client, seeded, admin)
+    accrued = scenarios["4"]["accrued_cost"]
+    today = datetime.now(timezone.utc).date()
+    monday = today - timedelta(days=today.weekday())
+
+    def raise_from(day):
+        return client.post(
+            f"/api/v1/employees/{drew.id}/work-terms",
+            json={"hourly_rate": "75.00", "weekly_hours": "40", "effective_from": str(day)},
+            headers=admin,
+        )
+
+    # A backdated raise over days already worked is refused.
+    assert raise_from(monday - timedelta(days=7)).status_code == 409
+
+    # A raise from next Monday adds $200 for each of the 10 remaining weekdays.
+    assert raise_from(monday + timedelta(days=7)).status_code == 201
+    after, scenarios = showcase_budget(client, seeded, admin)
+    assert scenarios["4"]["accrued_cost"] == accrued
+    assert Decimal(after["projected_cost"]) - Decimal(before["projected_cost"]) == Decimal("2000.00")
+
+    # Deactivating Drew ends the remaining work but keeps what was already accrued.
+    response = client.patch(
+        f"/api/v1/users/{drew.id}/status", json={"is_active": False}, headers=admin
+    )
+    assert response.status_code == 200, response.text
+    _, scenarios = showcase_budget(client, seeded, admin)
+    assert scenarios["4"]["accrued_cost"] == accrued
+    assert scenarios["4"]["projected_cost"] == "0.00"

@@ -39,6 +39,16 @@ def update_milestone(
     return milestone_service.update_milestone(db, current_user, milestone_id, payload)
 
 
+@router.delete("/{milestone_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_milestone(
+    milestone_id: int,
+    current_user: User = Depends(require_roles("admin", "manager")),
+    db: Session = Depends(get_db),
+) -> None:
+    """Delete a milestone with no assignments (admin, or the owning manager)."""
+    milestone_service.delete_milestone(db, current_user, milestone_id)
+
+
 @router.patch("/{milestone_id}/status", response_model=MilestoneOut)
 def update_milestone_status(
     milestone_id: int,
@@ -46,7 +56,7 @@ def update_milestone_status(
     current_user: User = Depends(require_roles("admin", "manager")),
     db: Session = Depends(get_db),
 ):
-    """Mark a milestone completed (admin, or the owning manager)."""
+    """Mark a milestone completed or cancelled (admin, or the owning manager)."""
     return milestone_service.set_milestone_status(db, current_user, milestone_id, payload.status)
 
 

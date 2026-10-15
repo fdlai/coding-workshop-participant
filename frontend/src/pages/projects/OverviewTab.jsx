@@ -15,7 +15,7 @@ export default function OverviewTab({ project, timeline, isAdmin, canManage, can
   const [confirm, setConfirm] = useState(null);
   const budget = useFetch(() => (canSeeBudget ? projectsApi.budget(project.id) : Promise.resolve(null)), [project.id, canSeeBudget, project.updated_at]);
 
-  const milestones = timeline.milestones;
+  const milestones = timeline.milestones.filter((m) => m.status !== 'cancelled');
   const done = milestones.filter((m) => m.status === 'completed').length;
   const percent = milestones.length ? Math.round((done / milestones.length) * 100) : 0;
   const editable = canManage && !project.is_archived;

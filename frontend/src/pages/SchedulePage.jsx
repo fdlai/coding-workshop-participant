@@ -45,9 +45,13 @@ function TeamSchedule({ user }) {
   const end = addDays(anchor, days - 1);
   const today = todayIso();
   const state = useFetch(async () => {
-    const team = await relationshipsApi.employeesOf(user.id);
+    const [team, availability] = await Promise.all([
+      relationshipsApi.employeesOf(user.id),
+      scheduleApi.availability({ start: anchor, end }),
+    ]);
     const schedules = await Promise.all(team.map((e) => scheduleApi.forEmployee(e.id, anchor, end)));
-    return team.map((e, i) => ({ employee: e, items: schedules[i] }));
+    const busyById = new Map(availability.map((a) => [a.employee.id, a.busy]));
+    return team.map((e, i) => ({ employee: e, items: schedules[i], busy: busyById.get(e.id) || [] }));
   }, [anchor, view]);
   const dayList = Array.from({ length: days }, (_, i) => addDays(anchor, i));
 
@@ -81,14 +85,24 @@ function TeamSchedule({ user }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map(({ employee, items }) => (
+                {rows.map(({ employee, items, busy }) => (
                   <tr key={employee.id}>
                     <td className="sticky left-0 whitespace-nowrap bg-white px-3 py-2 font-medium text-slate-800">{fullName(employee)}</td>
                     {dayList.map((d) => {
                       const hit = items.find((it) => coversDay(it.assignment, d));
+                      const busyElsewhere = !hit && busy.some((b) => b.start_date <= d && d <= b.end_date);
+                      let cellClass = d === today ? 'bg-indigo-50' : '';
+                      let label = 'Free';
+                      if (hit) {
+                        cellClass = 'bg-indigo-200';
+                        label = `${hit.project_name} – ${hit.milestone_name}`;
+                      } else if (busyElsewhere) {
+                        cellClass = 'bg-slate-300';
+                        label = 'Booked on another project';
+                      }
                       return (
-                        <td key={d} className={`h-9 min-w-8 border-l border-slate-100 ${hit ? 'bg-indigo-200' : d === today ? 'bg-indigo-50' : ''}`} title={hit ? `${hit.project_name} – ${hit.milestone_name}` : 'Free'}>
-                          <span className="sr-only">{hit ? hit.project_name : 'Free'}</span>
+                        <td key={d} className={`h-9 min-w-8 border-l border-slate-100 ${cellClass}`} title={label}>
+                          <span className="sr-only">{label}</span>
                         </td>
                       );
                     })}

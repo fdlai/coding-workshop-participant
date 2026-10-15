@@ -7,6 +7,7 @@ import { Button, ConfirmDialog, DataTable, Field, FormModal, TextArea, TextInput
 import { Card, StatusBadge } from '../../components/ui/Display';
 import Gantt from '../../components/Gantt';
 import { formatDate } from '../../utils/format';
+import MilestoneDetailsModal from './MilestoneDetailsModal';
 
 function MilestoneFormModal({ projectId, milestone, onClose }) {
   const [form, setForm] = useState({
@@ -49,10 +50,13 @@ MilestoneFormModal.propTypes = {
 };
 
 /** Milestones tab: Gantt chart, table, add/edit and completion workflow. */
-export default function MilestonesTab({ project, canSchedule, today, onChanged }) {
+export default function MilestonesTab({ project, canSchedule, canSeeBudget, today, onChanged }) {
   const milestones = useFetch(() => milestonesApi.list(project.id), [project.id, project.updated_at]);
+  const [viewing, setViewing] = useState(null);
   const [editing, setEditing] = useState(null); // null | 'new' | milestone
   const [completing, setCompleting] = useState(null);
+  const [cancelling, setCancelling] = useState(null);
+  const [deleting, setDeleting] = useState(null);
 
   function refresh(changed) {
     if (changed) {
@@ -62,7 +66,15 @@ export default function MilestonesTab({ project, canSchedule, today, onChanged }
   }
 
   const columns = [
-    { key: 'name', header: 'Milestone', render: (m) => <span className="font-medium text-slate-900">{m.name}</span> },
+    {
+      key: 'name',
+      header: 'Milestone',
+      render: (m) => (
+        <button type="button" onClick={() => setViewing(m)} className="text-left font-medium text-slate-900 hover:text-indigo-700 hover:underline">
+          {m.name}
+        </button>
+      ),
+    },
     { key: 'period', header: 'Period', render: (m) => `${formatDate(m.start_date)} – ${formatDate(m.end_date)}` },
     { key: 'status', header: 'Status', render: (m) => <StatusBadge status={m.status} /> },
     { key: 'completed_at', header: 'Completed', render: (m) => formatDate(m.completed_at) },
@@ -70,11 +82,14 @@ export default function MilestonesTab({ project, canSchedule, today, onChanged }
       key: 'actions',
       header: 'Actions',
       render: (m) => (m.status === 'pending' ? (
-        <div className="flex gap-2">
+        // Keep action clicks from also opening the details (the whole row is clickable).
+        <div className="flex gap-2" onClick={(event) => event.stopPropagation()}>
           <Button variant="ghost" size="sm" onClick={() => setEditing(m)}>Edit</Button>
           <Button variant="ghost" size="sm" onClick={() => setCompleting(m)}>Complete</Button>
+          <Button variant="ghost" size="sm" onClick={() => setCancelling(m)}>Cancel</Button>
+          <Button variant="ghost" size="sm" onClick={() => setDeleting(m)}>Delete</Button>
         </div>
-      ) : <span className="text-xs text-slate-400">Locked</span>),
+      ) : <span className="text-slate-400">—<span className="sr-only">No actions available</span></span>),
     }] : []),
   ];
 
@@ -89,10 +104,22 @@ export default function MilestonesTab({ project, canSchedule, today, onChanged }
         ) : (
           <>
             <Card title="Timeline"><Gantt milestones={rows} today={today} /></Card>
-            <DataTable columns={columns} rows={rows} />
+            <div className="space-y-2">
+              <p className="text-sm text-slate-500">Click a milestone to see its details and everyone who worked on it.</p>
+              <DataTable columns={columns} rows={rows} onRowClick={setViewing} />
+            </div>
           </>
         ))}
       </Async>
+
+      {viewing && (
+        <MilestoneDetailsModal
+          projectId={project.id}
+          milestone={viewing}
+          canSeeBudget={canSeeBudget}
+          onClose={() => setViewing(null)}
+        />
+      )}
 
       {editing && (
         <MilestoneFormModal
@@ -111,6 +138,24 @@ export default function MilestonesTab({ project, canSchedule, today, onChanged }
           onClose={(changed) => { setCompleting(null); refresh(changed); }}
         />
       )}
+      {cancelling && (
+        <ConfirmDialog
+          title="Cancel milestone"
+          message={`Cancel "${cancelling.name}"? Its assignments end at the start of today, so today is not billed. Work done through yesterday stays on the budget, and this cannot be undone.`}
+          confirmLabel="Cancel milestone"
+          onConfirm={() => milestonesApi.setStatus(cancelling.id, 'cancelled')}
+          onClose={(changed) => { setCancelling(null); refresh(changed); }}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title="Delete milestone"
+          message={`Delete "${deleting.name}"? This only works for milestones with no assignments; otherwise cancel it instead.`}
+          confirmLabel="Delete milestone"
+          onConfirm={() => milestonesApi.remove(deleting.id)}
+          onClose={(changed) => { setDeleting(null); refresh(changed); }}
+        />
+      )}
     </div>
   );
 }
@@ -118,6 +163,7 @@ export default function MilestonesTab({ project, canSchedule, today, onChanged }
 MilestonesTab.propTypes = {
   project: PropTypes.object.isRequired,
   canSchedule: PropTypes.bool.isRequired,
+  canSeeBudget: PropTypes.bool.isRequired,
   today: PropTypes.string.isRequired,
   onChanged: PropTypes.func.isRequired,
 };

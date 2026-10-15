@@ -25,9 +25,24 @@ export default function AdminDashboard() {
               <Card title="Budget health" className="lg:col-span-1">
                 <DonutChart
                   segments={[
-                    { label: 'On track', value: d.health_counts.on_track, color: '#10b981' },
-                    { label: 'At risk', value: d.health_counts.at_risk, color: '#f59e0b' },
-                    { label: 'Over budget', value: d.health_counts.over_budget, color: '#ef4444' },
+                    {
+                      label: 'On track',
+                      value: d.health_counts.on_track,
+                      color: '#10b981',
+                      tooltip: 'Accrued plus projected labor cost is under 95% of the estimated budget.',
+                    },
+                    {
+                      label: 'At risk',
+                      value: d.health_counts.at_risk,
+                      color: '#f59e0b',
+                      tooltip: 'Accrued plus projected labor cost is 95% to 100% of the estimated budget.',
+                    },
+                    {
+                      label: 'Over budget',
+                      value: d.health_counts.over_budget,
+                      color: '#ef4444',
+                      tooltip: 'Accrued plus projected labor cost is above the estimated budget if current staffing continues.',
+                    },
                   ]}
                 />
               </Card>

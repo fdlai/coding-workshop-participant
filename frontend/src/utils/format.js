@@ -12,11 +12,21 @@ export const formatMoney = (value) =>
 export const formatMoneyCents = (value) =>
   value === null || value === undefined ? '—' : currencyCents.format(Number(value));
 
-/** Format "2030-06-12" as "Jun 12, 2030" without timezone shifting. */
+/** Parse an API timestamp, treating one without an explicit offset (Z, +hh:mm or -hh:mm) as UTC. */
+function parseTimestamp(iso) {
+  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/.test(iso);
+  return new Date(hasOffset ? iso : `${iso}Z`);
+}
+
+/**
+ * Format "2030-06-12" as "Jun 12, 2030" without timezone shifting. A full timestamp
+ * (e.g. completed_at) shows its UTC calendar day, the same day the backend bills, even
+ * when the API sends it in another offset such as "2030-06-11T20:00:00-04:00".
+ */
 export function formatDate(iso) {
   if (!iso) return '—';
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
+  const date = iso.length > 10 ? parseTimestamp(iso) : new Date(`${iso}T00:00:00Z`);
+  return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -26,7 +36,7 @@ export function formatDate(iso) {
 
 export function formatDateTime(iso) {
   if (!iso) return '—';
-  return new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`).toLocaleString('en-US', {
+  return parseTimestamp(iso).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -59,6 +69,16 @@ export const coversDay = (assignment, day) =>
   assignment.state !== 'cancelled' &&
   assignment.start_date <= day &&
   day <= assignment.effective_end_date;
+
+/**
+ * Status to display for an assignment. The API reports work that was cut short as
+ * "completed"; show why it stopped before its planned end instead.
+ */
+export function assignmentDisplayState(assignment, milestoneStatus) {
+  const { state, ended_at: endedAt, effective_end_date: end, planned_end_date: planned } = assignment;
+  if (state !== 'completed' || !endedAt || end >= planned) return state;
+  return milestoneStatus === 'cancelled' ? 'milestone_cancelled' : 'removed_early';
+}
 
 export const capitalize = (text) => (text ? text[0].toUpperCase() + text.slice(1) : '');
 

@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import { daysBetween, formatDate } from '../utils/format';
 
-const BAR_COLOR = { completed: 'bg-emerald-500', pending: 'bg-indigo-500' };
+const BAR_COLOR = { completed: 'bg-emerald-500', pending: 'bg-indigo-500', cancelled: 'bg-slate-400' };
 
 /**
  * Minimal Gantt chart: one bar per milestone positioned by percentage of the

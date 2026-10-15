@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-MilestoneStatus = Literal["pending", "completed"]
+MilestoneStatus = Literal["pending", "completed", "cancelled"]
 
 
 def _clean_name(value: str) -> str:

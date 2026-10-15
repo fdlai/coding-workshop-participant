@@ -24,6 +24,7 @@ Safety properties:
 
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -45,6 +46,11 @@ from scripts.seed_data import (  # noqa: F401  (re-exported for tests and caller
     EMPLOYEES,
     MANAGERS,
     SECOND_MANAGER,
+    SHOWCASE_DEACTIVATED,
+    SHOWCASE_EMPLOYEES,
+    SHOWCASE_MANAGER,
+    SHOWCASE_PROJECT,
+    SHOWCASE_TERMS,
     _terms_plan,
     build_projects,
     reporting_lines,
@@ -226,6 +232,129 @@ def _demo_user(db: Session, first: str, last: str) -> User:
     return user
 
 
+def _project_exists(db: Session, name: str) -> bool:
+    return db.scalar(select(Project.id).where(Project.name == name)) is not None
+
+
+def _create_project(
+    db: Session,
+    report: SeedReport,
+    today: date,
+    day: Callable[[int], date],
+    spec: dict,
+    admin: User,
+    manager: User,
+    employees: list[User],
+    order: int,
+) -> Project:
+    """Create one project with its milestones and assignments; ``day`` maps offsets to dates."""
+    project = Project(
+        name=spec["name"],
+        description=spec.get("description")
+        or f"Demonstration project: {spec['name'][6:]}.",
+        manager_id=manager.id,
+        created_by=admin.id,
+        start_date=day(spec["start"]),
+        estimated_end_date=day(spec["end"]),
+        estimated_budget=Decimal(spec["budget"]),
+        status=spec["status"],
+        is_archived=spec["archived"],
+        archived_at=_midnight(day(spec["end"])) if spec["archived"] else None,
+    )
+    db.add(project)
+    db.flush()
+    milestones = []
+    for name, start, end, completed, *extra in spec["milestones"]:
+        milestone = Milestone(
+            project_id=project.id,
+            name=name,
+            description=extra[0] if extra else None,
+            start_date=day(start),
+            end_date=day(end),
+            status="completed" if completed else "pending",
+            completed_at=_midnight(day(end)) if completed else None,
+        )
+        db.add(milestone)
+        milestones.append(milestone)
+        report.add("milestones", True)
+    db.flush()
+    for emp_idx, ms_idx, start, end, ended in spec["assignments"]:
+        db.add(
+            MilestoneAssignment(
+                milestone_id=milestones[ms_idx].id,
+                employee_id=employees[emp_idx].id,
+                start_date=day(start),
+                planned_end_date=day(end),
+                ended_at=_midnight(day(ended)) if ended is not None else None,
+            )
+        )
+        report.add("assignments", True)
+    db.flush()
+    _audit(
+        db,
+        today,
+        day(spec["start"] - 7),
+        order,
+        actor_id=admin.id,
+        action="project.create",
+        entity_type="project",
+        entity_id=project.id,
+        description=f"Seeded demo project '{project.name}'",
+        changes={"after": {"name": project.name, "status": project.status}},
+    )
+    report.add("projects", True)
+    return project
+
+
+def _add_terms(
+    db: Session,
+    report: SeedReport,
+    today: date,
+    admin: User,
+    employee: User,
+    plan: list[tuple[int, Decimal, Decimal]],
+    day: Callable[[int], date],
+    order: int,
+) -> None:
+    """Add an employee's terms history unless they already have any; audit raises only."""
+    if db.scalar(
+        select(EmployeeWorkTerms.id).where(EmployeeWorkTerms.employee_id == employee.id)
+    ) is not None:
+        for _ in plan:
+            report.add("work_terms", False)
+        return
+    for position, (offset, rate, hours) in enumerate(plan):
+        effective = day(offset)
+        row = EmployeeWorkTerms(
+            employee_id=employee.id,
+            hourly_rate=rate,
+            weekly_hours=hours,
+            effective_from=effective,
+        )
+        db.add(row)
+        db.flush()
+        if position > 0:
+            _audit(
+                db,
+                today,
+                effective,
+                order,
+                actor_id=admin.id,
+                action="work_terms.create",
+                entity_type="employee_work_terms",
+                entity_id=row.id,
+                description=f"Seeded compensation change for '{employee.username}'",
+                changes={
+                    "after": {
+                        "hourly_rate": str(rate),
+                        "weekly_hours": str(hours),
+                        "effective_from": str(effective),
+                    }
+                },
+            )
+        report.add("work_terms", True)
+
+
 def seed_projects(
     db: Session, report: SeedReport | None = None, today: date | None = None
 ) -> SeedReport:
@@ -244,67 +373,74 @@ def seed_projects(
         return today + timedelta(days=offset)
 
     for order, spec in enumerate(DEMO_PROJECTS):
-        if (
-            db.scalar(select(Project.id).where(Project.name == spec["name"]))
-            is not None
-        ):
+        if _project_exists(db, spec["name"]):
             report.add("projects", False)
             continue
-        project = Project(
-            name=spec["name"],
-            description=spec.get("description")
-            or f"Demonstration project: {spec['name'][6:]}.",
-            manager_id=managers[spec["manager"]].id,
-            created_by=admin.id,
-            start_date=day(spec["start"]),
-            estimated_end_date=day(spec["end"]),
-            estimated_budget=Decimal(spec["budget"]),
-            status=spec["status"],
-            is_archived=spec["archived"],
-            archived_at=_midnight(day(spec["end"])) if spec["archived"] else None,
+        _create_project(
+            db, report, today, day, spec, admin, managers[spec["manager"]], employees, order
         )
-        db.add(project)
-        db.flush()
-        milestones = []
-        for name, start, end, completed, *extra in spec["milestones"]:
-            milestone = Milestone(
-                project_id=project.id,
-                name=name,
-                description=extra[0] if extra else None,
-                start_date=day(start),
-                end_date=day(end),
-                status="completed" if completed else "pending",
-                completed_at=_midnight(day(end)) if completed else None,
-            )
-            db.add(milestone)
-            milestones.append(milestone)
-            report.add("milestones", True)
-        db.flush()
-        for emp_idx, ms_idx, start, end, ended in spec["assignments"]:
-            db.add(
-                MilestoneAssignment(
-                    milestone_id=milestones[ms_idx].id,
-                    employee_id=employees[emp_idx].id,
-                    start_date=day(start),
-                    planned_end_date=day(end),
-                    ended_at=_midnight(day(ended)) if ended is not None else None,
-                )
-            )
-            report.add("assignments", True)
-        db.flush()
+    return report
+
+
+def seed_showcase(
+    db: Session, report: SeedReport | None = None, today: date | None = None
+) -> SeedReport:
+    """Create the labor-cost showcase project, its employees and their pay history.
+
+    Dates are anchored to the Monday of ``today``'s week so every scenario spans whole
+    weeks. Idempotent by project name: once the project exists nothing is added.
+    Requires the demo organization. Flushes but does not commit.
+    """
+    report = report or SeedReport()
+    today = today or datetime.now(timezone.utc).date()
+    if _project_exists(db, SHOWCASE_PROJECT["name"]):
+        report.add("projects", False)
+        return report
+    admin = _demo_user(db, *ADMIN[:2])
+    manager = _demo_user(db, *MANAGERS[SHOWCASE_MANAGER][:2])
+    monday = today - timedelta(days=today.weekday())
+
+    def day(offset: int) -> date:
+        return monday + timedelta(days=offset)
+
+    employees = []
+    for index, (first, last, title) in enumerate(SHOWCASE_EMPLOYEES):
+        employee = _ensure_user(
+            db,
+            report,
+            today,
+            admin.id,
+            200 + index,
+            first=first,
+            last=last,
+            title=title,
+            role="employee",
+            password_hash=admin.password_hash,  # every demo account shares one password
+        )
+        _ensure_link(db, report, today, admin, employee, manager, False, 200 + index)
+        _add_terms(db, report, today, admin, employee, SHOWCASE_TERMS[index], day, 200 + index)
+        employees.append(employee)
+
+    _create_project(
+        db, report, today, day, SHOWCASE_PROJECT, admin, manager, employees, len(DEMO_PROJECTS)
+    )
+
+    for index, offset in SHOWCASE_DEACTIVATED.items():
+        employee = employees[index]
+        employee.is_active = False
         _audit(
             db,
             today,
-            day(spec["start"] - 7),
-            order,
+            day(offset),
+            200 + index,
             actor_id=admin.id,
-            action="project.create",
-            entity_type="project",
-            entity_id=project.id,
-            description=f"Seeded demo project '{project.name}'",
-            changes={"after": {"name": project.name, "status": project.status}},
+            action="user.deactivate",
+            entity_type="user",
+            entity_id=employee.id,
+            description=f"Deactivated account '{employee.username}'",
+            changes={"before": {"is_active": True}, "after": {"is_active": False}},
         )
-        report.add("projects", True)
+    db.flush()
     return report
 
 
@@ -321,46 +457,13 @@ def seed_work_terms(
     report = report or SeedReport()
     today = today or datetime.now(timezone.utc).date()
     admin = _demo_user(db, *ADMIN[:2])
+
+    def day(offset: int) -> date:
+        return today + timedelta(days=offset)
+
     for index, (first, last, _) in enumerate(EMPLOYEES):
         employee = _demo_user(db, first, last)
-        has_terms = db.scalar(
-            select(EmployeeWorkTerms.id).where(
-                EmployeeWorkTerms.employee_id == employee.id
-            )
-        )
-        for position, (offset, rate, hours) in enumerate(_terms_plan(index)):
-            if has_terms is not None:
-                report.add("work_terms", False)
-                continue
-            effective = today + timedelta(days=offset)
-            row = EmployeeWorkTerms(
-                employee_id=employee.id,
-                hourly_rate=rate,
-                weekly_hours=hours,
-                effective_from=effective,
-            )
-            db.add(row)
-            db.flush()
-            if position > 0:
-                _audit(
-                    db,
-                    today,
-                    effective,
-                    index,
-                    actor_id=admin.id,
-                    action="work_terms.create",
-                    entity_type="employee_work_terms",
-                    entity_id=row.id,
-                    description=f"Seeded compensation change for '{employee.username}'",
-                    changes={
-                        "after": {
-                            "hourly_rate": str(rate),
-                            "weekly_hours": str(hours),
-                            "effective_from": str(effective),
-                        }
-                    },
-                )
-            report.add("work_terms", True)
+        _add_terms(db, report, today, admin, employee, _terms_plan(index), day, index)
     return report
 
 
@@ -373,6 +476,7 @@ def seed_all(db: Session, password: str) -> SeedReport:
     report = seed_organization(db, password)
     seed_work_terms(db, report)
     seed_projects(db, report)
+    seed_showcase(db, report)
     return report
 
 
@@ -425,6 +529,7 @@ def main() -> None:
         f"Demo logins: {demo_username(*ADMIN[:2])}, {demo_username(*MANAGERS[0][:2])}, "
         f"{demo_username(*EMPLOYEES[0][:2])} (password from SEED_DEMO_PASSWORD)."
     )
+    print(f"Labor-cost showcase project: '{SHOWCASE_PROJECT['name']}'.")
 
 
 if __name__ == "__main__":

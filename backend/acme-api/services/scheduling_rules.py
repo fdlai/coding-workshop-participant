@@ -149,6 +149,7 @@ def end_open_assignments(
     employee_id: int | None = None,
     project_id: int | None = None,
     manager_id: int | None = None,
+    milestone_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """End active/future assignments at the start of ``today`` without deleting rows.
 
@@ -172,6 +173,8 @@ def end_open_assignments(
         query = query.where(Project.id == project_id)
     if manager_id is not None:
         query = query.where(Project.manager_id == manager_id)
+    if milestone_id is not None:
+        query = query.where(MilestoneAssignment.milestone_id == milestone_id)
 
     ended: list[dict[str, Any]] = []
     for assignment, milestone in list(db.execute(query)):

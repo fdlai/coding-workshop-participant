@@ -6,7 +6,7 @@ import { Async, EmptyState } from '../../components/ui/Feedback';
 import { Button, ConfirmDialog, DataTable } from '../../components/ui/Controls';
 import { Avatar, StatusBadge } from '../../components/ui/Display';
 import { AssignModal, EditAssignmentModal, TransferModal } from './AssignmentModals';
-import { formatDate, fullName } from '../../utils/format';
+import { assignmentDisplayState, formatDate, fullName } from '../../utils/format';
 
 /**
  * Employees tab: every assignment in the project (one row per assignment, history
@@ -17,7 +17,9 @@ export default function EmployeesTab({ project, canSchedule, isAdmin, onChanged 
   const load = useCallback(async () => {
     const milestones = await milestonesApi.list(project.id);
     const lists = await Promise.all(milestones.map((m) => assignmentsApi.list(m.id)));
-    const rows = lists.flatMap((list, i) => list.map((a) => ({ ...a, milestoneName: milestones[i].name })));
+    const rows = lists.flatMap((list, i) =>
+      list.map((a) => ({ ...a, milestoneName: milestones[i].name, milestoneStatus: milestones[i].status })),
+    );
     return { milestones, rows };
   }, [project.id]);
   const state = useFetch(load, [project.id, project.updated_at]);
@@ -36,12 +38,16 @@ export default function EmployeesTab({ project, canSchedule, isAdmin, onChanged 
       key: 'employee',
       header: 'Employee',
       render: (a) => (
-        <span className="flex items-center gap-2"><Avatar person={a.employee} size="sm" />{fullName(a.employee)}</span>
+        <span className="flex items-center gap-2">
+          <Avatar person={a.employee} size="sm" />
+          {fullName(a.employee)}
+          {a.employee?.is_active === false && <StatusBadge status="inactive" />}
+        </span>
       ),
     },
     { key: 'milestoneName', header: 'Milestone' },
     { key: 'period', header: 'Period', render: (a) => `${formatDate(a.start_date)} – ${formatDate(a.effective_end_date)}` },
-    { key: 'state', header: 'Status', render: (a) => <StatusBadge status={a.state} /> },
+    { key: 'state', header: 'Status', render: (a) => <StatusBadge status={assignmentDisplayState(a, a.milestoneStatus)} /> },
     ...(canSchedule ? [{
       key: 'actions',
       header: 'Actions',
@@ -51,7 +57,7 @@ export default function EmployeesTab({ project, canSchedule, isAdmin, onChanged 
           <Button variant="ghost" size="sm" onClick={() => setModal({ type: 'transfer', assignment: a, milestones })}>Transfer</Button>
           <Button variant="ghost" size="sm" onClick={() => setModal({ type: 'end', assignment: a })}>Remove</Button>
         </div>
-      ) : <span className="text-xs text-slate-400">History</span>),
+      ) : <span className="text-slate-400">—<span className="sr-only">No actions available</span></span>),
     }] : []),
   ];
 

@@ -59,7 +59,7 @@ export default function ProjectDetailPage() {
             </div>
 
             {tab === 'Overview' && <OverviewTab {...props} timeline={timeline} canManage={canManage} canSeeBudget={canSeeBudget} />}
-            {tab === 'Milestones' && <MilestonesTab {...props} canSchedule={canSchedule} today={timeline.today} />}
+            {tab === 'Milestones' && <MilestonesTab {...props} canSchedule={canSchedule} canSeeBudget={canSeeBudget} today={timeline.today} />}
             {tab === 'Employees' && <EmployeesTab {...props} canSchedule={canSchedule} />}
             {tab === 'Budget' && <BudgetTab project={project} canSeeBudget={canSeeBudget} />}
           </>

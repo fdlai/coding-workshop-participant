@@ -68,7 +68,10 @@ def test_empty_project_is_zero(client, world):
 
 def test_health_thresholds(client, world, db):
     add_assignment(db, world.milestone, world.emp, date(2030, 6, 10), date(2030, 6, 19))  # 2560
-    for budget_value, expected in (("3200", "at_risk"), ("2560", "at_risk"), ("2559.99", "over_budget"), ("3201", "on_track")):
+    for budget_value, expected in (
+        ("3200", "on_track"), ("2696", "on_track"), ("2694", "at_risk"),
+        ("2560", "at_risk"), ("2559.99", "over_budget"), ("3201", "on_track"),
+    ):
         world.project.estimated_budget = Decimal(budget_value)
         db.commit()
         body = budget(client, "adminuser", world.project.id).json()

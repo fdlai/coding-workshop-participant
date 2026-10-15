@@ -15,7 +15,7 @@ from services import clock
 from services.access import ensure_can_manage_project, get_milestone_or_404
 from services.audit_service import record_audit
 from services.project_service import ensure_schedulable, lock_project
-from services.scheduling_rules import as_utc, conflict, effective_window, unprocessable
+from services.scheduling_rules import as_utc, conflict, effective_window, end_open_assignments, unprocessable
 
 
 def _validate_dates(db: Session, project: Project, start: date, end: date, exclude_id: int | None) -> None:
@@ -30,6 +30,7 @@ def _validate_dates(db: Session, project: Project, start: date, end: date, exclu
         Milestone.project_id == project.id,
         Milestone.start_date <= end,
         Milestone.end_date >= start,
+        Milestone.status != "cancelled",
     )
     if exclude_id is not None:
         query = query.where(Milestone.id != exclude_id)
@@ -141,6 +142,36 @@ def update_milestone(
     return milestone
 
 
+def delete_milestone(db: Session, actor: User, milestone_id: int) -> None:
+    """Delete a milestone that has no assignments; otherwise it must be cancelled to keep history."""
+    try:
+        milestone = get_milestone_or_404(db, milestone_id)
+        project = lock_project(db, milestone.project_id)
+        ensure_can_manage_project(actor, project)
+        ensure_schedulable(project)
+        has_assignments = db.scalar(
+            select(MilestoneAssignment.id).where(MilestoneAssignment.milestone_id == milestone.id).limit(1)
+        )
+        if has_assignments is not None:
+            raise conflict("Milestone has assignments and cannot be deleted; cancel it instead to keep its history")
+
+        snapshot = _snapshot(milestone, ["project_id", "name", "start_date", "end_date", "status"])
+        db.delete(milestone)
+        record_audit(
+            db,
+            actor_id=actor.id,
+            action="milestone.delete",
+            entity_type="milestone",
+            entity_id=milestone.id,
+            description=f"Deleted milestone '{milestone.name}' from project '{project.name}'",
+            changes={"before": snapshot},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _ensure_assignments_fit(db: Session, milestone: Milestone, start: date, end: date) -> None:
     """New dates must contain every assignment period that accrues or will accrue work."""
     offenders = []
@@ -162,10 +193,12 @@ def set_milestone_status(
     *,
     now: datetime | None = None,
 ) -> Milestone:
-    """Mark a milestone completed (forward-only; reopening is not supported).
+    """Mark a milestone completed or cancelled (forward-only; no reopening).
 
     Completion stamps ``completed_at``; assignment rows are never modified.
     Work on the milestone stops accruing after the completion date.
+    Cancelling ends the milestone's open assignments at the start of today, so
+    work already done stays billed and nothing further accrues.
     """
     now = as_utc(now or clock.utc_now())
     try:
@@ -174,9 +207,29 @@ def set_milestone_status(
         ensure_can_manage_project(actor, project)
         ensure_schedulable(project)
         if new_status == "pending":
-            raise conflict("Milestones can only move from pending to completed (reopening is not supported)")
-        if milestone.status == "completed":
-            raise conflict("Milestone is already completed")
+            raise conflict("Milestones can only move from pending to completed or cancelled (reopening is not supported)")
+        if milestone.status != "pending":
+            raise conflict(f"Milestone is already {milestone.status}")
+
+        if new_status == "cancelled":
+            ended = end_open_assignments(db, today=now.date(), milestone_id=milestone.id)
+            milestone.status = "cancelled"
+            record_audit(
+                db,
+                actor_id=actor.id,
+                action="milestone.cancel",
+                entity_type="milestone",
+                entity_id=milestone.id,
+                description=f"Cancelled milestone '{milestone.name}'",
+                changes={
+                    "before": {"status": "pending"},
+                    "after": {"status": "cancelled"},
+                    "ended_assignments": ended,
+                },
+            )
+            db.commit()
+            db.refresh(milestone)
+            return milestone
 
         milestone.status = "completed"
         milestone.completed_at = now

@@ -244,8 +244,9 @@ _PHASES = {
 
 # (name, description, phase set, manager, kind, start offset, milestone lengths in days,
 #  budget factor, late). ``kind``: done | archived | active | planned | abandoned.
-# ``budget factor`` scales estimated labour cost into the estimated budget; values under
-# about 1.05 produce tight or over-budget projects. ``late`` leaves the milestone before
+# ``budget factor`` scales estimated labour cost into the estimated budget; a value
+# below 1 gives an over-budget project, and about 1.0 to 1.05 gives one at risk (95% or
+# more of budget). ``late`` leaves the milestone before
 # the current one open, so it shows as overdue. Abandoned projects give the day the
 # project was abandoned as ``late``.
 _PROJECT_PLAN = [
@@ -268,15 +269,15 @@ _PROJECT_PLAN = [
     ("Brand Refresh Microsite", "Campaign microsite for the annual brand relaunch.", "design", 3, "archived", -340, (30, 35, 40, 30), 1.35, None),
     # Active
     ("Customer 360 Platform", "Single customer view across sales, support and billing systems.", "data", 5, "active", -90, (45, 45, 45, 45), 1.30, False),
-    ("Zero Trust Access Rollout", "Move workforce applications behind identity-aware access.", "compliance", 7, "active", -150, (40, 50, 40, 40, 40), 1.22, True),
+    ("Zero Trust Access Rollout", "Move workforce applications behind identity-aware access.", "compliance", 7, "active", -150, (40, 50, 40, 40, 40), 0.97, True),
     ("Mobile Wallet Integration", "Add tap-to-pay wallets to the customer mobile app.", "software", 10, "active", -60, (30, 30, 30, 30, 30), 1.28, False),
     ("Self-Service Analytics Portal", "Governed self-service reporting for business teams.", "data", 5, "active", -30, (25, 35, 45, 45), 1.35, False),
     ("Kubernetes Platform Migration", "Move core services from virtual machines to managed Kubernetes.", "infra", 4, "active", -200, (50, 50, 50, 50, 40), 1.05, False),
-    ("Partner API Program", "Public partner API with sandbox and developer documentation.", "software", 8, "active", -120, (30, 40, 40, 30, 30), 1.25, False),
-    ("Fraud Detection Dashboard", "Near-real-time dashboard for the fraud operations team.", "data", 5, "active", -75, (35, 35, 35, 35), 1.15, False),
+    ("Partner API Program", "Public partner API with sandbox and developer documentation.", "software", 8, "active", -120, (30, 40, 40, 30, 30), 1.04, False),
+    ("Fraud Detection Dashboard", "Near-real-time dashboard for the fraud operations team.", "data", 5, "active", -75, (35, 35, 35, 35), 0.72, False),
     ("Accessibility Remediation", "Bring internal tools to WCAG 2.2 AA.", "design", 3, "active", -15, (30, 40, 50, 40), 1.40, False),
     ("Customer Onboarding Revamp", "Shorter digital onboarding journey for new business customers.", "software", 9, "active", -45, (30, 30, 40, 40, 30), 1.30, False),
-    ("Disaster Recovery Automation", "Automated failover runbooks and quarterly recovery tests.", "infra", 2, "active", -180, (45, 45, 45, 45, 45), 1.02, True),
+    ("Disaster Recovery Automation", "Automated failover runbooks and quarterly recovery tests.", "infra", 2, "active", -180, (45, 45, 45, 45, 45), 0.80, True),
     ("Finance Data Warehouse", "Governed finance marts for month-end reporting.", "data", 11, "active", -100, (40, 40, 40, 40), 1.25, False),
     ("Internal Developer Portal", "Service catalogue, templates and documentation hub for engineers.", "software", 4, "active", -10, (60, 60, 60, 40), 1.45, False),
     # Planned (start in the future)
@@ -418,3 +419,69 @@ def build_projects() -> list[dict]:
             }
         )
     return projects
+
+
+# ------------------------------------------------------------------------- showcase
+
+# A small hand-built project for presenting how labor cost follows pay, staffing and
+# account changes. It has its own employees, so the generated data above is unaffected.
+# Each milestone is one scenario staffed by one person, so the Budget tab's
+# "Cost by milestone" table shows each person's cost on its own.
+#
+# Day offsets are relative to the *Monday* of the seed week (not the seed date), so
+# every scenario covers whole Monday-Friday weeks. Everyone earns $50/hr x 40 h =
+# $400 per weekday = $2,000 per week, unless raised.
+SHOWCASE_MANAGER = 0  # Morgan Hayes
+SHOWCASE_EMPLOYEES = [
+    ("Jordan", "Raines", "Software Engineer"),
+    ("Casey", "Holt", "QA Engineer"),
+    ("Riley", "Shaw", "Data Analyst"),
+    ("Drew", "Kendall", "Frontend Developer"),
+]
+# (effective offset, hourly rate, weekly hours) per showcase employee index.
+_SHOWCASE_BASE = (-400, Decimal("50.00"), Decimal(40))
+SHOWCASE_TERMS = {
+    0: [_SHOWCASE_BASE, (-7, Decimal("75.00"), Decimal(40))],  # raise from week 2's Monday
+    1: [_SHOWCASE_BASE],
+    2: [_SHOWCASE_BASE],
+    3: [_SHOWCASE_BASE],
+}
+# Showcase employees whose accounts are deactivated, with the offset of that day.
+SHOWCASE_DEACTIVATED = {2: -2}
+
+SHOWCASE_PROJECT = {
+    "name": "Showcase: Labor Cost Accuracy",
+    "description": (
+        "Each milestone is one scenario with one person. Everyone earns $50/hr x 40 h "
+        "= $2,000 per week. "
+        "(1) Jordan worked 2 weeks and got a raise to $75/hr after week 1: "
+        "$2,000 + $3,000 = $5,000 (not $4,000 or $6,000). "
+        "(2) Casey was scheduled for 2 weeks but removed after week 1: $2,000 (not $4,000). "
+        "(3) Riley worked 2 weeks, then the account was deactivated: still $4,000. "
+        "(4) Drew is still working: change pay or staffing live and watch accrued cost "
+        "stay put while projected cost moves."
+    ),
+    "manager": SHOWCASE_MANAGER,
+    "status": "active",
+    "archived": False,
+    "start": -14,
+    "end": 18,
+    "budget": "30000.00",
+    "milestones": [
+        ("1. Pay raise halfway through", -14, -3, True,
+         "Jordan Raines: week 1 at $50/hr, week 2 at $75/hr. Expected $5,000."),
+        ("2. Removed after one week", -14, -3, True,
+         "Casey Holt: scheduled for 2 weeks, removed after week 1. Expected $2,000."),
+        ("3. Deactivated after finishing", -14, -3, True,
+         "Riley Shaw: worked 2 weeks, then the account was deactivated. Expected $4,000."),
+        ("4. Live demo (in progress)", -7, 18, False,
+         "Drew Kendall: 4 weeks at $50/hr. Change pay or staffing during the demo."),
+    ],
+    # (showcase employee index, milestone index, start, planned end, ended offset or None)
+    "assignments": [
+        (0, 0, -14, -3, None),
+        (1, 1, -14, -3, -7),  # removed at the start of week 2's Monday
+        (2, 2, -14, -3, None),
+        (3, 3, -7, 18, None),
+    ],
+}

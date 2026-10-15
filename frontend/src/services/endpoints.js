@@ -51,6 +51,7 @@ export const milestonesApi = {
     request(`/projects/${projectId}/milestones`, { method: 'POST', body: milestone }),
   update: (id, changes) => request(`/milestones/${id}`, { method: 'PATCH', body: changes }),
   setStatus: (id, status) => request(`/milestones/${id}/status`, { method: 'PATCH', body: { status } }),
+  remove: (id) => request(`/milestones/${id}`, { method: 'DELETE' }),
 };
 
 export const assignmentsApi = {

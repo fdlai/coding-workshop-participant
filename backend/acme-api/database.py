@@ -34,5 +34,7 @@ class Base(DeclarativeBase):
 
 def get_db() -> Generator[Session, None, None]:
     """Provide a transactional database session for API requests."""
-    with SessionLocal() as db:
+    with (
+        SessionLocal() as db
+    ):  # equivalent to the try...finally pattern I've used in the past
         yield db

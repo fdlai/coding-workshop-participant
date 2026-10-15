@@ -30,6 +30,17 @@ def test_manager_schedules_own_employee_and_audits(client, world, db):
     assert db.query(AuditLog).filter_by(action="assignment.create").count() == 1
 
 
+def test_employee_sees_teammates_without_cost_data(client, world):
+    assign(client, "mgr", world.milestone.id, world.emp.id, "2030-06-20", "2030-06-30")
+    assign(client, "mgr", world.milestone.id, world.emp2.id, "2030-06-20", "2030-06-30")
+    url = f"{API}/milestones/{world.milestone.id}/assignments"
+    rows = client.get(url, headers=login_headers(client, "emp")).json()
+    assert {r["employee"]["username"] for r in rows} == {"emp", "emp2"}
+    assert not any("rate" in k or "cost" in k or "email" in k for r in rows for k in {*r, *r["employee"]})
+    # a stranger who was never on the project still cannot list it
+    assert client.get(url, headers=login_headers(client, "stranger")).status_code == 403
+
+
 def test_unlinked_employee_rejected_even_for_admin(client, world):
     for who in ("mgr", "adminuser"):
         r = assign(client, who, world.milestone.id, world.stranger.id, "2030-06-20", "2030-06-30")

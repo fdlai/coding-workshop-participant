@@ -142,7 +142,10 @@ def _raise_if_conflicts(
 
 
 def list_assignments(db: Session, actor: User, milestone: Milestone, today: date) -> list[AssignmentOut]:
-    """List a milestone's assignments; employees see only their own rows."""
+    """List a milestone's assignments; employees on the project see their teammates too.
+
+    The payload carries no compensation or cost data, so it is safe for employees.
+    """
     project = get_project_or_404(db, milestone.project_id)
     if actor.role == "employee":
         if not can_view_project(db, actor, project):
@@ -150,8 +153,6 @@ def list_assignments(db: Session, actor: User, milestone: Milestone, today: date
     else:
         ensure_can_manage_project(actor, project)
     query = select(MilestoneAssignment).where(MilestoneAssignment.milestone_id == milestone.id)
-    if actor.role == "employee":
-        query = query.where(MilestoneAssignment.employee_id == actor.id)
     rows = db.scalars(query.order_by(MilestoneAssignment.start_date, MilestoneAssignment.id))
     return [to_assignment_out(a, milestone, today) for a in rows]
 

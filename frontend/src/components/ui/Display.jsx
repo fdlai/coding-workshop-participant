@@ -18,6 +18,8 @@ const STATUS_TONE = {
   pending: 'amber',
   scheduled: 'blue',
   cancelled: 'gray',
+  removed_early: 'amber',
+  milestone_cancelled: 'gray',
   on_track: 'green',
   at_risk: 'amber',
   over_budget: 'red',
@@ -161,10 +163,22 @@ export function DonutChart({ segments }) {
       </svg>
       <ul className="space-y-2 text-sm">
         {segments.map((segment) => (
-          <li key={segment.label} className="flex items-center gap-2">
+          <li
+            key={segment.label}
+            className="group relative flex items-center gap-2 outline-none"
+            tabIndex={segment.tooltip ? 0 : undefined}
+          >
             <span className="h-3 w-3 rounded-full" style={{ backgroundColor: segment.color }} />
             <span className="text-slate-600">{segment.label}</span>
             <span className="font-semibold text-slate-900">{segment.value}</span>
+            {segment.tooltip && (
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-56 rounded-md bg-slate-800 px-3 py-2 text-xs text-white shadow-lg group-hover:block group-focus:block"
+              >
+                {segment.tooltip}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -173,6 +187,6 @@ export function DonutChart({ segments }) {
 }
 DonutChart.propTypes = {
   segments: PropTypes.arrayOf(
-    PropTypes.shape({ label: PropTypes.string, value: PropTypes.number, color: PropTypes.string }),
+    PropTypes.shape({ label: PropTypes.string, value: PropTypes.number, color: PropTypes.string, tooltip: PropTypes.string }),
   ).isRequired,
 };

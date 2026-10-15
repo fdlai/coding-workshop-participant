@@ -47,7 +47,7 @@ export default function AppLayout() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
+      <header className="sticky top-0 z-40 border-b border-slate-200 bg-[#DCE4F2]">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6">
           <span className="text-xl font-extrabold tracking-tight text-indigo-600">ACME</span>
 

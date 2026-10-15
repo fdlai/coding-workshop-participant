@@ -30,7 +30,9 @@ def get_user_or_404(db: Session, user_id: int) -> User:
     """Return the user with the given id or raise 404."""
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
     return user
 
 
@@ -77,7 +79,10 @@ def list_users(
 def create_user(db: Session, actor: User, payload: UserCreate) -> User:
     """Create a user and its audit record in one transaction."""
     username = normalize_username(payload.username)
-    if db.scalar(select(User.id).where(func.lower(User.username) == username)) is not None:
+    if (
+        db.scalar(select(User.id).where(func.lower(User.username) == username))
+        is not None
+    ):
         raise _conflict("Username is already in use")
     if _email_taken(db, payload.email):
         raise _conflict("Email is already in use")
@@ -106,7 +111,15 @@ def create_user(db: Session, actor: User, payload: UserCreate) -> User:
             changes={
                 "after": _snapshot(
                     user,
-                    ["username", "email", "first_name", "last_name", "role", "job_title", "is_active"],
+                    [
+                        "username",
+                        "email",
+                        "first_name",
+                        "last_name",
+                        "role",
+                        "job_title",
+                        "is_active",
+                    ],
                 )
             },
         )
@@ -194,23 +207,37 @@ def update_own_profile(db: Session, user: User, payload: SelfProfileUpdate) -> U
 
 def _has_role_dependencies(db: Session, user: User) -> str | None:
     """Return a reason string if the user's current role is still in use."""
-    if db.scalar(
-        select(EmployeeManager.employee_id)
-        .where(or_(EmployeeManager.employee_id == user.id, EmployeeManager.manager_id == user.id))
-        .limit(1)
-    ) is not None:
-        return "Remove the user's employee-manager relationships before changing their role"
-    if db.scalar(select(Project.id).where(Project.manager_id == user.id).limit(1)) is not None:
-        return "Reassign the user's managed projects before changing their role"
-    if db.scalar(
-        select(MilestoneAssignment.id)
-        .where(
-            MilestoneAssignment.employee_id == user.id,
-            MilestoneAssignment.ended_at.is_(None),
-            MilestoneAssignment.planned_end_date >= utc_today(),
+    if (
+        db.scalar(
+            select(EmployeeManager.employee_id)
+            .where(
+                or_(
+                    EmployeeManager.employee_id == user.id,
+                    EmployeeManager.manager_id == user.id,
+                )
+            )
+            .limit(1)
         )
-        .limit(1)
-    ) is not None:
+        is not None
+    ):
+        return "Remove the user's employee-manager relationships before changing their role"
+    if (
+        db.scalar(select(Project.id).where(Project.manager_id == user.id).limit(1))
+        is not None
+    ):
+        return "Reassign the user's managed projects before changing their role"
+    if (
+        db.scalar(
+            select(MilestoneAssignment.id)
+            .where(
+                MilestoneAssignment.employee_id == user.id,
+                MilestoneAssignment.ended_at.is_(None),
+                MilestoneAssignment.planned_end_date >= utc_today(),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         return "End the user's active milestone assignments before changing their role"
     return None
 
@@ -249,7 +276,12 @@ def change_role(db: Session, actor: User, user: User, new_role: str) -> User:
 
 
 def set_active_status(
-    db: Session, actor: User, user: User, is_active: bool, *, now: datetime | None = None
+    db: Session,
+    actor: User,
+    user: User,
+    is_active: bool,
+    *,
+    now: datetime | None = None,
 ) -> User:
     """Activate or deactivate a user account.
 
@@ -272,21 +304,29 @@ def set_active_status(
     try:
         ended: list[dict[str, Any]] = []
         if not is_active:
-            if user.role == "manager" and db.scalar(
-                select(Project.id)
-                .where(
-                    Project.manager_id == user.id,
-                    Project.status == "active",
-                    Project.is_archived.is_(False),
+            # if trying to deactivate a manager, and they have an active project, we refuse the deactivation
+            if (
+                user.role == "manager"
+                and db.scalar(
+                    select(Project.id)
+                    .where(
+                        Project.manager_id == user.id,
+                        Project.status == "active",
+                        Project.is_archived.is_(False),
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            ) is not None:
+                is not None
+            ):
                 raise _conflict(
                     "Reassign or close the manager's active projects before deactivating them"
                 )
             if user.role == "employee":
+                # freeze an employee's row to prevent further modifications while deactivating
                 lock_employee(db, user.id)
-                ended = end_open_assignments(db, today=utc_today(now), employee_id=user.id)
+                ended = end_open_assignments(
+                    db, today=utc_today(now), employee_id=user.id
+                )
 
         user.is_active = is_active
         changes: dict[str, Any] = {

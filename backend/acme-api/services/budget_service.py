@@ -17,7 +17,7 @@ from services.access import ensure_can_manage_project, ensure_can_view_project, 
 from services.cost_service import money
 from services.scheduling_rules import effective_window, utc_today
 
-AT_RISK_PERCENT = Decimal("80")
+AT_RISK_PERCENT = Decimal("95")
 HUNDRED = Decimal("100")
 BUDGET_NOTE = (
     "Estimates based on scheduled work (weekdays, effective-dated work terms); "

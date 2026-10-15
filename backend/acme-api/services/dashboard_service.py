@@ -46,6 +46,8 @@ def _project_health_rows(db: Session, projects: list[Project], today: date) -> l
     for project_id, status in db.execute(
         select(Milestone.project_id, Milestone.status).where(Milestone.project_id.in_(ids))
     ):
+        if status == "cancelled":
+            continue
         milestone_counts[project_id][0] += 1
         milestone_counts[project_id][1] += status == "completed"
 

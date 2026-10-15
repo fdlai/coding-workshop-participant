@@ -6,7 +6,7 @@ import function
 import maintenance
 from models.audit_log import AuditLog
 from models.user import User
-from scripts.seed import EMPLOYEES, MANAGERS, seed_organization
+from scripts.seed import EMPLOYEES, MANAGERS, SHOWCASE_EMPLOYEES, seed_organization
 
 GOOD_PASSWORD = "Workshop-Demo-2026"
 AURORA_HOST = "coding-workshop-rds-794d5d37.cluster-c7wy8oegepqp.us-east-2.rds.amazonaws.com"
@@ -52,7 +52,7 @@ def test_seed_is_idempotent_and_never_returns_secrets(aurora_env, factory, db):
 
     assert first["status"] == "seed_complete"
     assert first["created"]["users:manager"] == len(MANAGERS)
-    assert first["created"]["users:employee"] == len(EMPLOYEES)
+    assert first["created"]["users:employee"] == len(EMPLOYEES) + len(SHOWCASE_EMPLOYEES)
     assert second["created"] == {}
     assert second["skipped"]["users:employee"] == len(EMPLOYEES)
     assert first["totals"] == second["totals"]

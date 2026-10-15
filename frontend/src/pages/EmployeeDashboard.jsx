@@ -21,7 +21,7 @@ export default function EmployeeDashboard() {
                   <ScheduleList items={d.current_assignments} emptyTitle="You have no assignment today" />
                 </Card>
                 <Card title="Upcoming assignments">
-                  <ScheduleList items={d.upcoming_assignments} emptyTitle="No upcoming assignments" />
+                  <ScheduleList items={d.upcoming_assignments} emptyTitle="Nothing scheduled to start after today" />
                 </Card>
                 <Card title="My schedule (next 4 weeks)">
                   <WeekCalendar

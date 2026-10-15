@@ -72,7 +72,7 @@ def test_dashboards_are_role_scoped(client, world):
 
 def test_admin_dashboard_counts_health_and_activity(client, world, db):
     add_assignment(db, world.milestone, world.emp, date(2030, 6, 10), date(2030, 6, 19))  # $2,560
-    world.project.estimated_budget = Decimal("3000")  # 85% -> at risk
+    world.project.estimated_budget = Decimal("2650")  # 96.6% -> at risk
     db.commit()
     other = make_project(db, world.other_manager, world.admin, name="Beta", estimated_budget=Decimal("1000"))
     make_milestone(db, other, date(2030, 6, 1), date(2030, 6, 30))

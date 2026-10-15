@@ -75,3 +75,63 @@ def test_completed_milestone_rejects_new_assignments(client, world):
         headers=h,
     )
     assert r.status_code == 409
+
+
+def test_delete_milestone_without_assignments(client, world):
+    h = login_headers(client, "mgr")
+    r = client.delete(f"{API}/milestones/{world.milestone2.id}", headers=h)
+    assert r.status_code == 204
+    assert client.get(f"{API}/milestones/{world.milestone2.id}", headers=h).status_code == 404
+
+
+def test_delete_requires_manager_of_project(client, world):
+    for name in ("mgr2", "emp"):
+        r = client.delete(f"{API}/milestones/{world.milestone2.id}", headers=login_headers(client, name))
+        assert r.status_code == 403
+
+
+def test_delete_refused_when_milestone_has_assignments(client, world):
+    h = login_headers(client, "mgr")
+    r = client.post(
+        f"{API}/milestones/{world.milestone.id}/assignments",
+        json={"employee_id": world.emp.id, "start_date": "2030-06-20", "planned_end_date": "2030-06-25"},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    assert client.delete(f"{API}/milestones/{world.milestone.id}", headers=h).status_code == 409
+    assert client.get(f"{API}/milestones/{world.milestone.id}", headers=h).status_code == 200
+
+
+def test_cancel_ends_open_assignments_and_keeps_history(client, world, db):
+    from models.assignment import MilestoneAssignment
+
+    h = login_headers(client, "mgr")
+    for start, end in (("2030-06-12", "2030-06-30"), ("2030-07-10", "2030-07-20")):
+        r = client.post(
+            f"{API}/milestones/{world.milestone.id}/assignments",
+            json={"employee_id": world.emp.id, "start_date": start, "planned_end_date": end},
+            headers=h,
+        )
+        assert r.status_code == 201, r.text
+
+    r = client.patch(f"{API}/milestones/{world.milestone.id}/status", json={"status": "cancelled"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "cancelled"
+
+    db.expire_all()
+    rows = db.query(MilestoneAssignment).order_by(MilestoneAssignment.id).all()
+    assert len(rows) == 2  # history is never deleted
+    assert all(row.ended_at is not None and row.ended_at.date().isoformat() == "2030-06-12" for row in rows)
+
+    # Cancelled milestones are final: no edit, completion, reopening or deletion with history.
+    url = f"{API}/milestones/{world.milestone.id}/status"
+    assert client.patch(url, json={"status": "completed"}, headers=h).status_code == 409
+    assert client.patch(f"{API}/milestones/{world.milestone.id}", json={"name": "n"}, headers=h).status_code == 409
+    assert client.delete(f"{API}/milestones/{world.milestone.id}", headers=h).status_code == 409
+
+
+def test_cancelled_milestone_dates_can_be_reused(client, world):
+    h = login_headers(client, "mgr")
+    client.patch(f"{API}/milestones/{world.milestone2.id}/status", json={"status": "cancelled"}, headers=h)
+    url = f"{API}/projects/{world.project.id}/milestones"
+    assert client.post(url, json=body("2030-09-01", "2030-10-31", "Replacement"), headers=h).status_code == 201
