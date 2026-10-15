@@ -33,6 +33,7 @@ function lastRequest() {
 // [name, call, method, path, query, body]
 const cases = [
   ['authApi.me', () => authApi.me(), 'GET', '/auth/me', {}, undefined],
+  ['authApi.refresh', () => authApi.refresh(), 'POST', '/auth/refresh', {}, undefined],
   ['authApi.changePassword', () => authApi.changePassword('old', 'newpass12'), 'POST', '/auth/change-password', {}, { current_password: 'old', new_password: 'newpass12' }],
   ['authApi.updateProfile', () => authApi.updateProfile({ job_title: 'Lead' }), 'PATCH', '/users/me', {}, { job_title: 'Lead' }],
 

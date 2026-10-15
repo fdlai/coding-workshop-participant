@@ -9,9 +9,9 @@ and "Testing Expectations" in [full-stack.md](./full-stack.md).
 | `full-stack.md` requirement | How it is met | Result |
 |---|---|---|
 | Backend unit tests: Lambda functions in isolation | `tests/test_function_handler.py` drives `function.handler` with Function URL and maintenance events; service tests call business logic directly | Passing |
-| Backend integration tests: API endpoints with actual database connections | The whole pytest suite runs against PostgreSQL with `--postgres`, plus `tests/test_postgres_integration.py` (Alembic migrations, constraints, timestamps, `Decimal` precision) | 400 passed on PostgreSQL |
+| Backend integration tests: API endpoints with actual database connections | The whole pytest suite runs against PostgreSQL with `--postgres`, plus `tests/test_postgres_integration.py` (Alembic migrations, constraints, timestamps, `Decimal` precision) | 408 passed on PostgreSQL |
 | Backend error handling tests for CRUD | `tests/test_api_error_paths.py` and per-feature tests: 401, 403, 404, 409, 422 and database-constraint races | Passing |
-| Frontend component tests (Jest + React Testing Library) | `frontend/src/**/__tests__/*.test.jsx` | 331 passed |
+| Frontend component tests (Jest + React Testing Library) | `frontend/src/**/__tests__/*.test.jsx` | 341 passed |
 | Frontend API integration tests with mocked responses | `src/services/__tests__/api.test.js` and `endpoints.test.js` (every endpoint function), plus page tests that fake the backend at `fetch` level | Passing |
 | End-to-end tests (Cypress) | `frontend/cypress/e2e/01`–`09`: real UI → FastAPI → PostgreSQL | 35 passed |
 | Load testing (Artillery) | `tests/load/api-load.yml` with pass/fail thresholds | All 8 thresholds met, 0 errors |
@@ -80,9 +80,9 @@ Every case listed in `specifications.md` section 16 has a test. Tests freeze "to
 
 | Run | Tests | Coverage |
 |---|---|---|
-| `./bin/test-backend.sh` (SQLite) | 378 passed, 22 skipped | 96.7% |
-| `./bin/test-backend.sh --postgres` | 400 passed | 96.7% |
-| Clean Ubuntu 22.04 checkout, Python 3.13 (SQLite) | 378 passed, 22 skipped | 96.7% |
+| `./bin/test-backend.sh` (SQLite) | 386 passed, 22 skipped | 96.7% |
+| `./bin/test-backend.sh --postgres` | 408 passed | 96.7% |
+| Clean Ubuntu 22.04 checkout, Python 3.13 (SQLite) | 386 passed, 22 skipped | 96.7% |
 
 - **Skipped tests:** the 22 skips in the SQLite run are the PostgreSQL-only tests; they all
   run with `--postgres`.
@@ -126,8 +126,8 @@ Every case listed in `specifications.md` section 16 has a test. Tests freeze "to
 
 ```
 Test Suites: 31 passed, 31 total
-Tests:       331 passed, 331 total
-Statements   : 99.78%    Branches : 97.61%    Functions : 99.56%    Lines : 99.74%
+Tests:       341 passed, 341 total
+Statements   : 99.79%    Branches : 97.64%    Functions : 99.57%    Lines : 99.75%
 ```
 
 ## Critical User Paths (E2E)

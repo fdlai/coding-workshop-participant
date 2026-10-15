@@ -8,6 +8,7 @@ export const authApi = {
   login: (username, password) =>
     request('/auth/login', { method: 'POST', body: { username, password }, auth: false }),
   me: () => request('/auth/me'),
+  refresh: () => request('/auth/refresh', { method: 'POST' }),
   changePassword: (current_password, new_password) =>
     request('/auth/change-password', { method: 'POST', body: { current_password, new_password } }),
   updateProfile: (changes) => request('/users/me', { method: 'PATCH', body: changes }),

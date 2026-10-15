@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -11,6 +12,8 @@ from services.auth_service import (
     create_access_token,
     get_current_user,
     hash_password,
+    refresh_access_token,
+    security,
     verify_password,
 )
 
@@ -31,6 +34,19 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     token = create_access_token(user.username)
     return TokenResponse(
         access_token=token,
+        token_type="bearer",  # nosec B106 - OAuth2 token type, not a password
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.post("/auth/refresh", response_model=TokenResponse)
+def refresh(
+    current_user: User = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> TokenResponse:
+    """Renew a still-valid token for an active user, up to the maximum session length."""
+    return TokenResponse(
+        access_token=refresh_access_token(credentials.credentials),
         token_type="bearer",  # nosec B106 - OAuth2 token type, not a password
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )

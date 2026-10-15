@@ -1,4 +1,4 @@
-import { ApiError, onUnauthorized, request, tokenStore } from '../api';
+import { ApiError, onUnauthorized, request, tokenExpiresAt, tokenStore } from '../api';
 
 function respond(status, body, { badJson = false } = {}) {
   global.fetch.mockResolvedValueOnce({
@@ -87,5 +87,25 @@ describe('tokenStore', () => {
     expect(tokenStore.get()).toBe('t1');
     tokenStore.clear();
     expect(tokenStore.get()).toBeNull();
+  });
+});
+
+describe('tokenExpiresAt', () => {
+  const jwtWith = (payload) =>
+    `h.${btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}.sig`;
+
+  it('reads exp from the JWT payload as epoch milliseconds', () => {
+    expect(tokenExpiresAt(jwtWith({ sub: 'admin', exp: 1900000000 }))).toBe(1900000000000);
+  });
+
+  it('decodes base64url payloads', () => {
+    // "~~~" encodes to characters that differ between base64 and base64url
+    expect(tokenExpiresAt(jwtWith({ sub: '~~~?>>', exp: 42 }))).toBe(42000);
+  });
+
+  it('returns null for tokens it cannot read', () => {
+    expect(tokenExpiresAt('not-a-jwt')).toBeNull();
+    expect(tokenExpiresAt(jwtWith({ sub: 'admin' }))).toBeNull();
+    expect(tokenExpiresAt(null)).toBeNull();
   });
 });

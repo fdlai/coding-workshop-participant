@@ -90,29 +90,66 @@ def verify_password(password: str, password_hash: str) -> bool:
     return PasswordHash.recommended().verify(password, password_hash)
 
 
-def create_access_token(username: str) -> str:
-    """Issue a signed JWT access token for a valid user."""
-    expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    expires_at = datetime.now(timezone.utc) + expires_delta
-    payload = {"sub": username, "exp": expires_at}
+def create_access_token(username: str, auth_time: datetime | None = None) -> str:
+    """Issue a signed JWT access token for a valid user.
+
+    ``auth_time`` is when the user originally signed in; refreshed tokens carry it
+    forward so a session cannot be extended past ``MAX_SESSION_DAYS``.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {
+        "sub": username,
+        "exp": expires_at,
+        "auth_time": int((auth_time or now).timestamp()),
+    }
     return jwt.encode(payload, get_jwt_secret(), algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> str:
-    """Validate a JWT and return its subject."""
+def decode_token_claims(token: str) -> dict:
+    """Validate a JWT (signature and expiry) and return its claims."""
     try:
         payload = jwt.decode(
             token, get_jwt_secret(), algorithms=[settings.JWT_ALGORITHM]
         )
-        username = payload.get("sub")
-        if username is None:
+        if payload.get("sub") is None:
             raise ValueError("Missing subject in token")
-        return username
+        return payload
     except (JWTError, ValueError) as exc:  # pragma: no cover - exercised by API tests
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         ) from exc
+
+
+def decode_access_token(token: str) -> str:
+    """Validate a JWT and return its subject."""
+    return decode_token_claims(token)["sub"]
+
+
+def session_started_at(claims: dict) -> datetime:
+    """When the session began. Tokens issued before ``auth_time`` existed fall back to
+    their own issue time (expiry minus lifetime)."""
+    if "auth_time" in claims:
+        return datetime.fromtimestamp(claims["auth_time"], timezone.utc)
+    expires_at = datetime.fromtimestamp(claims["exp"], timezone.utc)
+    return expires_at - timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+
+def refresh_access_token(token: str) -> str:
+    """Exchange a still-valid token for a new one within the maximum session length.
+
+    Expired or invalid tokens are rejected by ``decode_token_claims``, so a token can
+    only be renewed while it still works; the caller must also check the user is active.
+    """
+    claims = decode_token_claims(token)
+    started = session_started_at(claims)
+    if datetime.now(timezone.utc) - started > timedelta(days=settings.MAX_SESSION_DAYS):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired; please sign in again",
+        )
+    return create_access_token(claims["sub"], auth_time=started)
 
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:

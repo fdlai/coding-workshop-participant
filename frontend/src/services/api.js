@@ -30,6 +30,21 @@ export const tokenStore = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
+/**
+ * When a JWT expires, in epoch milliseconds, read from its (unverified) payload.
+ * Only used to schedule a refresh; the server still validates every token.
+ * Returns null for anything that isn't a readable JWT with an `exp` claim.
+ */
+export function tokenExpiresAt(token) {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const { exp } = JSON.parse(atob(payload));
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Register a callback that runs when the API rejects the current token. */
 export function onUnauthorized(handler) {
   unauthorizedHandler = handler;

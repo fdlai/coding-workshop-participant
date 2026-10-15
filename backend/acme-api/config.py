@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    # Refreshing extends a session only up to this long after the original sign-in.
+    MAX_SESSION_DAYS: int = 7
     CORS_ORIGINS: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(
