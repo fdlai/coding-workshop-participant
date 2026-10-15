@@ -1,0 +1,82 @@
+erDiagram
+    users {
+        int id PK
+        varchar username UK "100, not null"
+        varchar first_name "100, not null"
+        varchar last_name "100, not null"
+        varchar email UK "255, not null"
+        varchar password_hash "255, not null"
+        varchar role "20, default employee"
+        varchar job_title "150, nullable"
+        varchar profile_picture_url "500, nullable"
+        boolean is_active "default true"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    employee_managers {
+        int employee_id PK,FK
+        int manager_id PK,FK
+    }
+    employee_work_terms {
+        int id PK
+        int employee_id FK "UK with effective_from"
+        numeric hourly_rate "12,2"
+        numeric weekly_hours "5,2, default 40"
+        date effective_from "UK with employee_id"
+    }
+    projects {
+        int id PK
+        varchar name "200, not null"
+        text description "nullable"
+        int manager_id FK
+        int created_by FK
+        date start_date
+        date estimated_end_date
+        numeric estimated_budget "14,2"
+        varchar status "20, default active"
+        boolean is_archived "default false"
+        timestamptz archived_at "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    milestones {
+        int id PK
+        int project_id FK
+        varchar name "200, not null"
+        text description "nullable"
+        text deliverables "nullable"
+        date start_date
+        date end_date
+        varchar status "20, default pending"
+        timestamptz completed_at "nullable"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    milestone_assignments {
+        int id PK
+        int milestone_id FK
+        int employee_id FK
+        date start_date
+        date planned_end_date
+        timestamptz ended_at "nullable"
+    }
+    audit_logs {
+        int id PK
+        int actor_id FK
+        varchar action "100, not null"
+        varchar entity_type "100, not null"
+        int entity_id "polymorphic, no FK"
+        text description "nullable"
+        json changes "nullable"
+        timestamptz created_at
+    }
+
+    users ||--o{ employee_managers : "is employee"
+    users ||--o{ employee_managers : "is manager"
+    users ||--o{ employee_work_terms : "has rates"
+    users ||--o{ projects : "manages"
+    users ||--o{ projects : "created"
+    projects ||--o{ milestones : "contains"
+    milestones ||--o{ milestone_assignments : "staffed by"
+    users ||--o{ milestone_assignments : "assigned to"
+    users ||--o{ audit_logs : "performed"

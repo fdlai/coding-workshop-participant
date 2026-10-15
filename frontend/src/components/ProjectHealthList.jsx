@@ -6,33 +6,50 @@ import { ProgressBar, StatusBadge } from './ui/Display';
 import { formatDate, formatMoney, fullName } from '../utils/format';
 
 const HEALTH_TONE = { on_track: 'green', at_risk: 'amber', over_budget: 'red' };
-const PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+const selectClass = 'rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700';
 
 /** Projects with budget health and utilization bars (dashboard payload shape). */
 export default function ProjectHealthList({ projects, showBudget = true }) {
   const [filter, setFilter] = useState('all');
+  const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
   if (!projects.length) return <EmptyState title="No active projects" />;
 
   const countOf = (health) => projects.filter((p) => p.health === health).length;
   const filtered = filter === 'all' ? projects : projects.filter((p) => p.health === filter);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   const changeFilter = (event) => {
     setFilter(event.target.value);
     setPage(1);
   };
 
+  const changePageSize = (event) => {
+    setPageSize(Number(event.target.value));
+    setPage(1);
+  };
+
   return (
     <div>
-      <div className="flex justify-end pb-2">
+      <div className="flex flex-wrap justify-end gap-2 pb-2">
+        <select
+          value={pageSize}
+          onChange={changePageSize}
+          aria-label="Projects per page"
+          className={selectClass}
+        >
+          {PAGE_SIZE_OPTIONS.map((size) => (
+            <option key={size} value={size}>{size} per page</option>
+          ))}
+        </select>
         <select
           value={filter}
           onChange={changeFilter}
           aria-label="Filter projects by budget health"
-          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+          className={selectClass}
         >
           <option value="all">All projects ({projects.length})</option>
           <option value="on_track">On track ({countOf('on_track')})</option>
